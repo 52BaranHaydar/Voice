@@ -18,6 +18,155 @@ public final class VoiceAiManager {
         }
     }
     
+    public func processAudioFileWithGemini(fileURL: URL, category: NoteCategory = .general) async -> (transcript: String, summary: String, actionItems: [String])? {
+        guard let audioData = try? Data(contentsOf: fileURL), !audioData.isEmpty else {
+            print("VoiceAiManager: Ses dosyası okunamadı veya boş.")
+            return nil
+        }
+        
+        let base64Audio = audioData.base64EncodedString()
+        let savedKey = UserDefaults.standard.string(forKey: "gemini_api_key") ?? ""
+        let activeKey = [apiKey, savedKey, Self.defaultApiKey]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty }) ?? ""
+            
+        guard !activeKey.isEmpty, let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=\(activeKey)") else {
+            print("VoiceAiManager: Aktif Gemini API Key bulunamadı.")
+            return nil
+        }
+        
+        let promptText: String
+        if category == .song {
+            promptText = """
+            Sen profesyonel bir Türk söz yazarı ve ses analistisisin.
+            Ektekı ses kaydını dinle ve yanıtını şu 3 açık bölümde ver:
+            
+            DÖKÜM:
+            [Ses kaydında konuşulan veya söylenen kelimelerin BİREBİR Türkçe metin dökümünü çıkar.]
+            
+            ÖZET:
+            [Bu fikirden ilham alarak Şarkı İsmi, Müzik Tarzı (Pop/Akustik/Rock vb.), Giriş, Kıta 1, Nakarat, Kıta 2 ve Çıkış bölümlerinden oluşan ritmik Türkçe şarkı sözü beste üret.]
+            
+            AKSİYON:
+            • 120 BPM Melodik Pop/Akustik Ritim Önerisi
+            • Vokal ve Akustik Gitar Altyapısı
+            """
+        } else {
+            promptText = """
+            Sen profesyonel bir Türkçe ses asistanısın.
+            Ektekı ses kaydını dinle ve yanıtını şu 3 açık bölümde ver:
+            
+            DÖKÜM:
+            [Ses kaydında konuşulan Türkçe kelimelerin BİREBİR metin dökümünü çıkar.]
+            
+            ÖZET:
+            [Ses kaydındaki ana konuyu açıklayan net ve öz bir Türkçe özet yaz.]
+            
+            AKSİYON:
+            • Konuşmadan çıkarılan yapılacak iş 1
+            • Konuşmadan çıkarılan yapılacak iş 2
+            """
+        }
+        
+        let jsonPayload: [String: Any] = [
+            "contents": [
+                [
+                    "parts": [
+                        [
+                            "inlineData": [
+                                "mimeType": "audio/m4a",
+                                "data": base64Audio
+                            ]
+                        ],
+                        [
+                            "text": promptText
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        
+        guard let httpBody = try? JSONSerialization.data(withJSONObject: jsonPayload) else {
+            return nil
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = httpBody
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse {
+                print("Gemini Multimodal Audio API HTTP Durum Kodu: \(httpResponse.statusCode)")
+            }
+            
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let candidates = json["candidates"] as? [[String: Any]],
+               let firstCandidate = candidates.first,
+               let content = firstCandidate["content"] as? [String: Any],
+               let parts = content["parts"] as? [[String: Any]],
+               let reply = parts.first?["text"] as? String {
+                
+                print("Gemini Audio AI İşleme Başarılı!\n\(reply)")
+                return parseGeminiAudioReply(reply)
+            } else {
+                if let rawString = String(data: data, encoding: .utf8) {
+                    print("Gemini Audio API Ham Yanıt: \(rawString)")
+                }
+            }
+        } catch {
+            print("Gemini Audio API Hatası: \(error)")
+        }
+        
+        return nil
+    }
+    
+    private func parseGeminiAudioReply(_ reply: String) -> (transcript: String, summary: String, actionItems: [String]) {
+        var transcript = ""
+        var summary = ""
+        var actions: [String] = []
+        
+        var currentSection = ""
+        let lines = reply.components(separatedBy: "\n")
+        
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.uppercased().hasPrefix("DÖKÜM:") || trimmed.uppercased().hasPrefix("METİN DÖKÜMÜ:") {
+                currentSection = "dokum"
+                let val = trimmed.replacingOccurrences(of: "DÖKÜM:", with: "").replacingOccurrences(of: "METİN DÖKÜMÜ:", with: "").trimmingCharacters(in: .whitespaces)
+                if !val.isEmpty { transcript += val + "\n" }
+            } else if trimmed.uppercased().hasPrefix("ÖZET:") || trimmed.uppercased().hasPrefix("ŞARKI:") {
+                currentSection = "ozet"
+                let val = trimmed.replacingOccurrences(of: "ÖZET:", with: "").replacingOccurrences(of: "ŞARKI:", with: "").trimmingCharacters(in: .whitespaces)
+                if !val.isEmpty { summary += val + "\n" }
+            } else if trimmed.uppercased().hasPrefix("AKSİYON:") || trimmed.uppercased().hasPrefix("RİTİM:") {
+                currentSection = "aksiyon"
+            } else {
+                if currentSection == "dokum" && !trimmed.isEmpty {
+                    transcript += line + "\n"
+                } else if currentSection == "ozet" && !trimmed.isEmpty {
+                    summary += line + "\n"
+                } else if currentSection == "aksiyon" && !trimmed.isEmpty {
+                    if trimmed.hasPrefix("•") || trimmed.hasPrefix("-") || trimmed.hasPrefix("*") {
+                        actions.append(trimmed)
+                    } else {
+                        actions.append("• " + trimmed)
+                    }
+                }
+            }
+        }
+        
+        let finalTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        return (
+            finalTranscript.isEmpty ? reply : finalTranscript,
+            finalSummary.isEmpty ? "Özet ses kaydından oluşturuldu." : finalSummary,
+            actions.isEmpty ? ["• Ses kaydı detayları incelenecektir."] : actions
+        )
+    }
+    
     public func summarizeTranscription(_ text: String, category: NoteCategory = .general) async -> (summary: String, actionItems: [String]) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return ("Ses kaydı için henüz metin dökümü bulunmuyor.", [])

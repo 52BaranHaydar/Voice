@@ -454,25 +454,33 @@ public struct RecorderView: View {
         
         isProcessingAi = true
         Task {
-            var finalTranscript = customTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            let fileURL = recorderManager.getAudioFileURL(fileName: fileName)
             
+            var finalTranscript = ""
+            var finalSummary = ""
+            var finalActions: [String] = []
+            
+            // 1. Gemini Multimodal Audio Processing (Listens to the actual recorded .m4a audio file!)
+            if let result = await aiManager.processAudioFileWithGemini(fileURL: fileURL, category: selectedCategory) {
+                finalTranscript = result.transcript
+                finalSummary = result.summary
+                finalActions = result.actionItems
+            }
+            
+            // 2. Fallback if Gemini Multimodal Audio processing is offline or unavailable
             if finalTranscript.isEmpty {
-                let fileURL = recorderManager.getAudioFileURL(fileName: fileName)
-                let fileTranscript = await speechManager.transcribeAudioFile(url: fileURL)
-                if !fileTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    finalTranscript = fileTranscript
+                finalTranscript = customTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+                if finalTranscript.isEmpty {
+                    finalTranscript = speechManager.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
                 }
+                if finalTranscript.isEmpty || finalTranscript.hasPrefix("🎤 [Canlı Dikte Başlatıldı]: ") {
+                    finalTranscript = "Ses kaydı alındı. İçeriği yukarıdan veya detay sayfasından düzenleyebilirsiniz."
+                }
+                
+                let (summary, actions) = await aiManager.summarizeTranscription(finalTranscript, category: selectedCategory)
+                finalSummary = summary
+                finalActions = actions
             }
-            
-            if finalTranscript.isEmpty {
-                finalTranscript = speechManager.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            
-            if finalTranscript.isEmpty || finalTranscript.hasPrefix("🎤 [Canlı Dikte Başlatıldı]: ") {
-                finalTranscript = "Ses kaydı alındı. İçeriği istediğiniz zaman düzenleyebilirsiniz."
-            }
-            
-            let (summary, actions) = await aiManager.summarizeTranscription(finalTranscript, category: selectedCategory)
             
             let newNote = VoiceNote(
                 title: noteTitle.isEmpty ? "Ses Notu" : noteTitle,
@@ -481,8 +489,8 @@ public struct RecorderView: View {
                 duration: duration,
                 createdAt: Date(),
                 transcript: finalTranscript,
-                aiSummary: summary,
-                actionItems: actions,
+                aiSummary: finalSummary,
+                actionItems: finalActions,
                 isFavorite: false,
                 audioLevels: levels
             )
