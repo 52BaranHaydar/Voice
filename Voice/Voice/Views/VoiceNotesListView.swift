@@ -2,6 +2,8 @@ import SwiftUI
 
 public struct VoiceNotesListView: View {
     @Binding public var voiceNotes: [VoiceNote]
+    public var onDeleteNote: ((VoiceNote) -> Void)?
+    
     @State private var searchText: String = ""
     @State private var selectedCategoryFilter: NoteCategory? = nil
     @State private var showOnlyFavorites: Bool = false
@@ -11,8 +13,9 @@ public struct VoiceNotesListView: View {
     @State private var selectedNoteForDetail: VoiceNote? = nil
     @State private var showAddTypedNoteSheet: Bool = false
     
-    public init(voiceNotes: Binding<[VoiceNote]>) {
+    public init(voiceNotes: Binding<[VoiceNote]>, onDeleteNote: ((VoiceNote) -> Void)? = nil) {
         self._voiceNotes = voiceNotes
+        self.onDeleteNote = onDeleteNote
     }
     
     public var filteredNotes: [VoiceNote] {
@@ -170,7 +173,16 @@ public struct VoiceNotesListView: View {
                 AddTypedNoteSheet(voiceNotes: $voiceNotes)
             }
             .sheet(item: $selectedNoteForDetail) { note in
-                VoiceNoteDetailView(note: binding(for: note), playerManager: playerManager, ttsManager: ttsManager)
+                if voiceNotes.contains(where: { $0.id == note.id }) {
+                    VoiceNoteDetailView(
+                        note: binding(for: note),
+                        playerManager: playerManager,
+                        ttsManager: ttsManager,
+                        onDelete: {
+                            deleteNote(note)
+                        }
+                    )
+                }
             }
         }
     }
@@ -271,11 +283,28 @@ public struct VoiceNotesListView: View {
         .onTapGesture {
             selectedNoteForDetail = note
         }
+        .contextMenu {
+            Button(action: { toggleFavorite(note) }) {
+                Label(note.isFavorite ? "Favorilerden Çıkar" : "Favorilere Ekle", systemImage: note.isFavorite ? "star.slash" : "star.fill")
+            }
+            
+            Button(role: .destructive, action: { deleteNote(note) }) {
+                Label("Notu Sil", systemImage: "trash")
+            }
+        }
     }
     
     private func toggleFavorite(_ note: VoiceNote) {
         if let index = voiceNotes.firstIndex(where: { $0.id == note.id }) {
             voiceNotes[index].isFavorite.toggle()
+        }
+    }
+    
+    private func deleteNote(_ note: VoiceNote) {
+        if let onDeleteNote = onDeleteNote {
+            onDeleteNote(note)
+        } else if let index = voiceNotes.firstIndex(where: { $0.id == note.id }) {
+            voiceNotes.remove(at: index)
         }
     }
     

@@ -9,10 +9,13 @@ public struct SettingsView: View {
     @AppStorage("notifications_enabled") private var notificationsEnabled: Bool = true
     @AppStorage("audio_quality") private var audioQuality: String = "HQ"
     @AppStorage("auto_delete_period") private var autoDeletePeriod: String = "Never"
+    @AppStorage("gemini_api_key") private var geminiApiKey: String = ""
     
     @State private var showPreferencesSheet: Bool = false
     @State private var showChangePasswordSheet: Bool = false
     @State private var showLogoutAlert: Bool = false
+    @State private var isApiKeyVisible: Bool = false
+    @State private var showApiKeySavedNotice: Bool = false
     
     @State private var oldPassword: String = ""
     @State private var newPassword: String = ""
@@ -122,6 +125,88 @@ public struct SettingsView: View {
                                     icon: "shield.checkmark.fill",
                                     color: Color.green
                                 )
+                            }
+                        }
+                        .glassCardStyle()
+                        
+                        // Google Gemini AI API Key Card
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundColor(VoiceTheme.accentPink)
+                                Text("Google Gemini AI Entegrasyonu")
+                                    .font(.headline.bold())
+                                    .foregroundColor(VoiceTheme.textPrimary)
+                                Spacer()
+                                if !geminiApiKey.isEmpty {
+                                    Text("Aktif ⚡")
+                                        .font(.caption2.bold())
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(Color.green.opacity(0.2))
+                                        .foregroundColor(Color.green)
+                                        .cornerRadius(8)
+                                }
+                            }
+                            
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Gemini 1.5 / 2.0 Flash API Anahtarı")
+                                    .font(.caption.bold())
+                                    .foregroundColor(VoiceTheme.textSecondary)
+                                
+                                HStack {
+                                    if isApiKeyVisible {
+                                        TextField("AI Studio API Key girin...", text: $geminiApiKey)
+                                            .foregroundColor(.white)
+                                    } else {
+                                        SecureField("AI Studio API Key girin...", text: $geminiApiKey)
+                                            .foregroundColor(.white)
+                                    }
+                                    
+                                    Button(action: { isApiKeyVisible.toggle() }) {
+                                        Image(systemName: isApiKeyVisible ? "eye.slash.fill" : "eye.fill")
+                                            .foregroundColor(VoiceTheme.textSecondary)
+                                    }
+                                }
+                                .padding()
+                                .background(VoiceTheme.bgCard)
+                                .cornerRadius(14)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .stroke(VoiceTheme.bgCardBorder.opacity(0.8), lineWidth: 1)
+                                )
+                            }
+                            
+                            HStack {
+                                Button(action: {
+                                    showApiKeySavedNotice = true
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                                        showApiKeySavedNotice = false
+                                    }
+                                }) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: showApiKeySavedNotice ? "checkmark.circle.fill" : "square.and.arrow.down")
+                                        Text(showApiKeySavedNotice ? "Kaydedildi!" : "API Key Kaydet")
+                                    }
+                                    .font(.subheadline.bold())
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 10)
+                                    .background(VoiceTheme.primaryGlow)
+                                    .cornerRadius(12)
+                                }
+                                
+                                Spacer()
+                                
+                                Link(destination: URL(string: "https://aistudio.google.com")!) {
+                                    HStack(spacing: 4) {
+                                        Text("Ücretsiz API Key Al")
+                                        Image(systemName: "arrow.up.right.square")
+                                    }
+                                    .font(.caption.bold())
+                                    .foregroundColor(VoiceTheme.accentCyan)
+                                }
                             }
                         }
                         .glassCardStyle()

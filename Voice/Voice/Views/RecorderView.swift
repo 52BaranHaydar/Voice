@@ -3,6 +3,8 @@ import SwiftUI
 @MainActor
 public struct RecorderView: View {
     @Binding public var voiceNotes: [VoiceNote]
+    @AppStorage("speech_language") private var speechLanguage: String = "tr-TR"
+    
     @State private var recorderManager = AudioRecorderManager()
     @State private var speechManager = SpeechRecognizerManager()
     @State private var aiManager = VoiceAiManager()
@@ -304,6 +306,7 @@ public struct RecorderView: View {
             AddTypedNoteSheet(voiceNotes: $voiceNotes)
         }
         .onAppear {
+            speechManager.setLanguage(speechLanguage)
             Task {
                 _ = await recorderManager.requestPermissions()
                 _ = await speechManager.requestAuthorization()

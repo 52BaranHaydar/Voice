@@ -40,6 +40,16 @@ Kullanıcıların sesli konuşmalarını anında canlı metne dönüştürür, G
 
 ---
 
+## 📸 Uygulama Ekran Görüntüleri
+
+<p align="center">
+  <img src="Assets/screenshots/studio.png" width="30%" title="Ses Kayıt Stüdyosu" alt="Stüdyo Ekranı" />
+  <img src="Assets/screenshots/notes.png" width="30%" title="Not Kütüphanesi" alt="Notlarım Ekranı" />
+  <img src="Assets/screenshots/settings.png" width="30%" title="Ayarlar & Gemini AI" alt="Ayarlar Ekranı" />
+</p>
+
+---
+
 ## 🛠️ Teknoloji Yığını & Mimari
 
 | Bileşen | Kullanılan Teknoloji |

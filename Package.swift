@@ -14,7 +14,8 @@ let package = Package(
         .executableTarget(
             name: "Voice",
             dependencies: [],
-            path: "Sources/Voice"
+            path: "Sources/Voice",
+            resources: [.process("Assets.xcassets")]
         ),
         .testTarget(
             name: "VoiceTests",

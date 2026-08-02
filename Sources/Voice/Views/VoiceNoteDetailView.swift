@@ -5,16 +5,38 @@ public struct VoiceNoteDetailView: View {
     @Binding public var note: VoiceNote
     public var playerManager: AudioPlayerManager
     public var ttsManager: TextToSpeechManager
+    public var onDelete: (() -> Void)?
+    
     @Environment(\.dismiss) private var dismiss
     
     @State private var selectedSpeedIndex: Int = 1
     @State private var isCopied: Bool = false
+    @State private var showDeleteConfirmation: Bool = false
     private let speeds: [Float] = [0.5, 1.0, 1.5, 2.0]
     
-    public init(note: Binding<VoiceNote>, playerManager: AudioPlayerManager, ttsManager: TextToSpeechManager) {
+    public init(
+        note: Binding<VoiceNote>,
+        playerManager: AudioPlayerManager,
+        ttsManager: TextToSpeechManager,
+        onDelete: (() -> Void)? = nil
+    ) {
         self._note = note
         self.playerManager = playerManager
         self.ttsManager = ttsManager
+        self.onDelete = onDelete
+    }
+    
+    private var shareText: String {
+        """
+        📌 \(note.title)
+        📅 Tarih: \(note.formattedDate)
+        
+        📝 Metin İçeriği:
+        \(note.transcript)
+        
+        🤖 AI Özeti:
+        \(note.aiSummary)
+        """
     }
     
     public var body: some View {
@@ -39,7 +61,7 @@ public struct VoiceNoteDetailView: View {
             
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    // Header Bar (Close & Favorite)
+                    // Header Bar (Close, Delete & Favorite)
                     HStack {
                         Button(action: { dismiss() }) {
                             Image(systemName: "xmark")
@@ -55,16 +77,30 @@ public struct VoiceNoteDetailView: View {
                         
                         Spacer()
                         
-                        Button(action: { note.isFavorite.toggle() }) {
-                            Image(systemName: note.isFavorite ? "star.fill" : "star")
-                                .font(.system(size: 16, weight: .bold))
-                                .foregroundColor(note.isFavorite ? .yellow : VoiceTheme.textSecondary)
-                                .frame(width: 36, height: 36)
-                                .background(VoiceTheme.bgCard.opacity(0.8))
-                                .clipShape(Circle())
-                                .overlay(
-                                    Circle().stroke(note.isFavorite ? Color.yellow.opacity(0.5) : VoiceTheme.bgCardBorder.opacity(0.5), lineWidth: 1)
-                                )
+                        HStack(spacing: 12) {
+                            Button(action: { showDeleteConfirmation = true }) {
+                                Image(systemName: "trash.fill")
+                                    .font(.system(size: 15, weight: .bold))
+                                    .foregroundColor(Color.red)
+                                    .frame(width: 36, height: 36)
+                                    .background(Color.red.opacity(0.15))
+                                    .clipShape(Circle())
+                                    .overlay(
+                                        Circle().stroke(Color.red.opacity(0.3), lineWidth: 1)
+                                    )
+                            }
+                            
+                            Button(action: { note.isFavorite.toggle() }) {
+                                Image(systemName: note.isFavorite ? "star.fill" : "star")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundColor(note.isFavorite ? .yellow : VoiceTheme.textSecondary)
+                                    .frame(width: 36, height: 36)
+                                    .background(VoiceTheme.bgCard.opacity(0.8))
+                                    .clipShape(Circle())
+                                    .overlay(
+                                        Circle().stroke(note.isFavorite ? Color.yellow.opacity(0.5) : VoiceTheme.bgCardBorder.opacity(0.5), lineWidth: 1)
+                                    )
+                            }
                         }
                     }
                     
@@ -167,7 +203,7 @@ public struct VoiceNoteDetailView: View {
                                 
                                 Spacer()
                                 
-                                Button(action: shareTranscript) {
+                                ShareLink(item: shareText) {
                                     Image(systemName: "square.and.arrow.up")
                                         .font(.system(size: 16, weight: .bold))
                                         .foregroundColor(VoiceTheme.textPrimary)
@@ -180,7 +216,7 @@ public struct VoiceNoteDetailView: View {
                                 }
                             }
                         } else {
-                            // Written Note TTS Controls
+                            // Written Note TTS Controls & Native Share
                             HStack(spacing: 16) {
                                 Button(action: {
                                     if ttsManager.isSpeaking {
@@ -203,7 +239,7 @@ public struct VoiceNoteDetailView: View {
                                     .shadow(color: VoiceTheme.primaryGlow.opacity(0.4), radius: 8, x: 0, y: 3)
                                 }
                                 
-                                Button(action: shareTranscript) {
+                                ShareLink(item: shareText) {
                                     Image(systemName: "square.and.arrow.up")
                                         .font(.system(size: 16, weight: .bold))
                                         .foregroundColor(VoiceTheme.textPrimary)
@@ -336,9 +372,37 @@ public struct VoiceNoteDetailView: View {
                             )
                     }
                     .glassCardStyle()
+                    
+                    // Danger Zone: Delete Button
+                    Button(action: { showDeleteConfirmation = true }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "trash.fill")
+                            Text("Bu Notu Sil")
+                        }
+                        .font(.subheadline.bold())
+                        .foregroundColor(Color.red)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Color.red.opacity(0.12))
+                        .cornerRadius(14)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(Color.red.opacity(0.3), lineWidth: 1)
+                        )
+                    }
+                    .padding(.top, 6)
                 }
                 .padding()
             }
+        }
+        .alert("Notu Sil", isPresented: $showDeleteConfirmation) {
+            Button("İptal", role: .cancel) {}
+            Button("Sil", role: .destructive) {
+                onDelete?()
+                dismiss()
+            }
+        } message: {
+            Text("Bu notu ve bağlı ses dosyasını silmek istediğinize emin misiniz? Bu işlem geri alınamaz.")
         }
     }
     
@@ -361,20 +425,5 @@ public struct VoiceNoteDetailView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             isCopied = false
         }
-    }
-    
-    private func shareTranscript() {
-        let content = """
-        📌 \(note.title)
-        📅 Tarih: \(note.formattedDate)
-        
-        📝 Metin İçeriği:
-        \(note.transcript)
-        
-        🤖 AI Özeti:
-        \(note.aiSummary)
-        """
-        
-        print("Share Content:\n\(content)")
     }
 }
