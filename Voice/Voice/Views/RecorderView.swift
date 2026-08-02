@@ -356,14 +356,28 @@ public struct RecorderView: View {
             try? await Task.sleep(nanoseconds: 400_000_000)
             
             print("🎙️ Kaydedilen ses dosyası analiz ediliyor: \(fileName)")
-            let appleResult = await speechManager.transcribeAudioFile(url: fileURL)
+            
+            // 1. Önce Apple Speech ile dene (Gerçek iPhone'da 100% çalışır)
+            var finalResult = await speechManager.transcribeAudioFile(url: fileURL)
+            
+            // 2. Apple Speech başarısız olursa (Simülatördeki Error 1101 hatası) -> Gemini AI ile dene
+            if finalResult.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                print("⚡ Apple Speech sonuç vermedi (Simülatör kısıtlaması/Error 1101). Gemini AI deneniyor...")
+                if let geminiResult = await aiManager.processAudioFileWithGemini(fileURL: fileURL, category: selectedCategory) {
+                    if !geminiResult.transcript.isEmpty {
+                        finalResult = geminiResult.transcript
+                        print("✅ Gemini AI transkripsiyonu başarılı: \"\(finalResult)\"")
+                    }
+                }
+            }
             
             await MainActor.run {
-                if !appleResult.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    self.customTranscript = appleResult
-                    print("✅ Transkript Metin Kutununa Yazıldı: \"\(appleResult)\"")
+                if !finalResult.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self.customTranscript = finalResult
+                    print("✅ Transkript Metin Kutununa Yazıldı: \"\(finalResult)\"")
                 } else {
-                    print("⚠️ Transkript boş döndü.")
+                    print("⚠️ Transkript alınamadı. ( Xcode Simülatöründe Apple Speech 'Error 1101' verir. Ayarlar'dan Gemini API Key girerek veya Gerçek Cihazda (iPhone) test edebilirsiniz.)")
+                    self.customTranscript = ""
                 }
                 self.isTranscribing = false
             }
