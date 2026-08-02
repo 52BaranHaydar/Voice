@@ -325,20 +325,27 @@ public struct RecorderView: View {
         speechManager.stopTranscribing()
         isPulseAnimating = false
         noteTitle = "Ses Notu \(voiceNotes.count + 1)"
-        
-        var transcript = speechManager.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        if transcript.hasPrefix("🎤 [Canlı Dikte Başlatıldı]: ") {
-            transcript = String(transcript.dropFirst("🎤 [Canlı Dikte Başlatıldı]: ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        customTranscript = transcript
+        customTranscript = ""
         showSaveSheet = true
         
-        if customTranscript.isEmpty, let fileName = recorderManager.currentRecordingFileName {
+        // Kayıt dosyası üzerinde hemen transkripsiyon başlat
+        if let fileName = recorderManager.currentRecordingFileName {
             Task {
                 let fileURL = recorderManager.getAudioFileURL(fileName: fileName)
+                
+                // 1. Önce Apple Speech ile dene (API anahtarı gerektirmez, güvenilir)
+                let appleResult = await speechManager.transcribeAudioFile(url: fileURL)
+                if !appleResult.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self.customTranscript = appleResult
+                    print("✅ Önizleme transkripti hazır (Apple Speech): \(appleResult)")
+                    return
+                }
+                
+                // 2. Gemini ile dene (Apple Speech başarısız olursa)
                 if let result = await aiManager.processAudioFileWithGemini(fileURL: fileURL, category: selectedCategory) {
-                    if !result.transcript.isEmpty && self.customTranscript.isEmpty {
+                    if !result.transcript.isEmpty {
                         self.customTranscript = result.transcript
+                        print("✅ Önizleme transkripti hazır (Gemini): \(result.transcript)")
                     }
                 }
             }

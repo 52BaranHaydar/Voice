@@ -39,29 +39,12 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
     }
     
     public func startLiveTranscribing() {
-        stopTranscribing()
-        isTranscribing = true
+        // Canlı transkripsiyon devre dışı:
+        // AudioRecorderManager zaten mikrofonu kullanıyor.
+        // Transkripsiyon için kayıt bittikten sonra
+        // transcribeAudioFile(url:) çağrılmalıdır.
+        isTranscribing = false
         liveTranscript = ""
-        
-        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: selectedLanguageCode))
-        guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
-            print("Speech Recognizer yerel dili desteklemiyor.")
-            return
-        }
-        
-        let authStatus = SFSpeechRecognizer.authorizationStatus()
-        if authStatus == .authorized {
-            startRealAudioEngineStream(with: speechRecognizer)
-        } else {
-            SFSpeechRecognizer.requestAuthorization { [weak self] status in
-                Task { @MainActor [weak self] in
-                    guard let self = self else { return }
-                    if status == .authorized {
-                        self.startRealAudioEngineStream(with: speechRecognizer)
-                    }
-                }
-            }
-        }
     }
     
     private func startRealAudioEngineStream(with recognizer: SFSpeechRecognizer) {
@@ -121,27 +104,67 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
     }
     
     public func transcribeAudioFile(url: URL) async -> String {
-        let recognizer = SFSpeechRecognizer(locale: Locale(identifier: selectedLanguageCode)) ?? SFSpeechRecognizer()
-        guard let recognizer = recognizer, recognizer.isAvailable else {
-            return ""
-        }
-        
-        let request = SFSpeechURLRecognitionRequest(url: url)
-        request.shouldReportPartialResults = false
-        
-        return await withCheckedContinuation { continuation in
-            var hasResumed = false
-            recognizer.recognitionTask(with: request) { result, error in
-                guard !hasResumed else { return }
-                if let result = result, result.isFinal {
-                    hasResumed = true
-                    continuation.resume(returning: result.bestTranscription.formattedString)
-                } else if error != nil {
-                    hasResumed = true
-                    let fallbackStr = result?.bestTranscription.formattedString ?? ""
-                    continuation.resume(returning: fallbackStr)
+        // Önce yetkilendirme isteği
+        let authGranted = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            let current = SFSpeechRecognizer.authorizationStatus()
+            if current == .authorized {
+                cont.resume(returning: true)
+            } else {
+                SFSpeechRecognizer.requestAuthorization { status in
+                    cont.resume(returning: status == .authorized)
                 }
             }
         }
+        
+        guard authGranted else {
+            print("SpeechRecognizer: Yetkilendirme reddedildi.")
+            return ""
+        }
+        
+        // Seçili dili dene; başarısız olursa en-US ile dene
+        let localesToTry: [String] = [selectedLanguageCode, "tr-TR", "en-US"]
+        
+        for locale in localesToTry {
+            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)),
+                  recognizer.isAvailable else { continue }
+            
+            let request = SFSpeechURLRecognitionRequest(url: url)
+            request.shouldReportPartialResults = false
+            request.addsPunctuation = true
+            
+            print("SpeechRecognizer: \(locale) ile transkripsiyon başlıyor...")
+            
+            let result: String = await withCheckedContinuation { continuation in
+                var hasResumed = false
+                var bestSoFar = ""
+                
+                recognizer.recognitionTask(with: request) { taskResult, error in
+                    guard !hasResumed else { return }
+                    
+                    if let r = taskResult {
+                        bestSoFar = r.bestTranscription.formattedString
+                        if r.isFinal {
+                            hasResumed = true
+                            print("✅ SpeechRecognizer [\(locale)]: \(bestSoFar)")
+                            continuation.resume(returning: bestSoFar)
+                        }
+                    }
+                    
+                    if let err = error {
+                        print("SpeechRecognizer [\(locale)] hata: \(err.localizedDescription)")
+                        if !hasResumed {
+                            hasResumed = true
+                            continuation.resume(returning: bestSoFar)
+                        }
+                    }
+                }
+            }
+            
+            if !result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return result
+            }
+        }
+        
+        return ""
     }
 }
