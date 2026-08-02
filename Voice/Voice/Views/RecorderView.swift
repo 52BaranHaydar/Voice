@@ -332,6 +332,17 @@ public struct RecorderView: View {
         }
         customTranscript = transcript
         showSaveSheet = true
+        
+        if customTranscript.isEmpty, let fileName = recorderManager.currentRecordingFileName {
+            Task {
+                let fileURL = recorderManager.getAudioFileURL(fileName: fileName)
+                if let result = await aiManager.processAudioFileWithGemini(fileURL: fileURL, category: selectedCategory) {
+                    if !result.transcript.isEmpty && self.customTranscript.isEmpty {
+                        self.customTranscript = result.transcript
+                    }
+                }
+            }
+        }
     }
     
     private var saveNoteSheet: some View {
@@ -371,17 +382,28 @@ public struct RecorderView: View {
                         .font(.caption.bold())
                         .foregroundColor(VoiceTheme.textSecondary)
                     
-                    TextEditor(text: $customTranscript)
-                        .frame(height: 80)
-                        .padding(6)
-                        .scrollContentBackground(.hidden)
-                        .background(VoiceTheme.bgCard)
-                        .cornerRadius(14)
-                        .foregroundColor(.white)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(VoiceTheme.bgCardBorder, lineWidth: 1)
-                        )
+                    ZStack(alignment: .topLeading) {
+                        TextEditor(text: $customTranscript)
+                            .frame(height: 85)
+                            .padding(6)
+                            .scrollContentBackground(.hidden)
+                            .background(VoiceTheme.bgCard)
+                            .cornerRadius(14)
+                            .foregroundColor(.white)
+                        
+                        if customTranscript.isEmpty {
+                            Text("✨ Konuşmanız kaydedildi. İsterseniz buraya notunuzu yazabilir veya 'Kaydet & AI Analizi Çıkar' butonuna basarak Gemini AI'ın sesinizi dinleyip metne dökmesini sağlayabilirsiniz...")
+                                .font(.caption)
+                                .foregroundColor(VoiceTheme.textSecondary.opacity(0.6))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 12)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(VoiceTheme.bgCardBorder, lineWidth: 1)
+                    )
                 }
                 
                 VStack(alignment: .leading, spacing: 8) {

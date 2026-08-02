@@ -9,11 +9,11 @@ public final class VoiceAiManager {
     public var apiKey: String = ""
     public var isProcessing: Bool = false
     
-    private let modelCandidates = [
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-flash"
+    private let endpointTemplates = [
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=",
+        "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key="
     ]
     
     public init(apiKey: String = "") {
@@ -97,10 +97,8 @@ public final class VoiceAiManager {
             return nil
         }
         
-        for model in modelCandidates {
-            guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(activeKey)") else {
-                continue
-            }
+        for template in endpointTemplates {
+            guard let url = URL(string: template + activeKey) else { continue }
             
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
@@ -110,7 +108,7 @@ public final class VoiceAiManager {
             do {
                 let (data, response) = try await URLSession.shared.data(for: request)
                 let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-                print("Gemini Model '\(model)' Multimodal Audio API HTTP Durum Kodu: \(statusCode)")
+                print("Gemini Audio API Endpoint '\(template)' HTTP Durum Kodu: \(statusCode)")
                 
                 if statusCode == 200 {
                     if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -120,16 +118,16 @@ public final class VoiceAiManager {
                        let parts = content["parts"] as? [[String: Any]],
                        let reply = parts.first?["text"] as? String {
                         
-                        print("Gemini Model '\(model)' Audio AI İşleme Başarılı!\n\(reply)")
+                        print("Gemini Audio AI İşleme Başarılı!\n\(reply)")
                         return parseGeminiAudioReply(reply)
                     }
                 } else {
                     if let rawString = String(data: data, encoding: .utf8) {
-                        print("Gemini Model '\(model)' Yanıt (\(statusCode)): \(rawString)")
+                        print("Gemini API Endpoint '\(template)' Yanıt (\(statusCode)): \(rawString)")
                     }
                 }
             } catch {
-                print("Gemini Model '\(model)' API Hatası: \(error)")
+                print("Gemini API Endpoint Hatası: \(error)")
             }
         }
         
@@ -286,10 +284,8 @@ public final class VoiceAiManager {
             return generateLocalSmartSummary(text: text, category: category)
         }
         
-        for model in modelCandidates {
-            guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(cleanKey)") else {
-                continue
-            }
+        for template in endpointTemplates {
+            guard let url = URL(string: template + cleanKey) else { continue }
             
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
@@ -308,7 +304,7 @@ public final class VoiceAiManager {
                        let parts = content["parts"] as? [[String: Any]],
                        let reply = parts.first?["text"] as? String {
                         
-                        print("Gemini Model '\(model)' Özeti/Şarkı Sözü Başarıyla Alındı!")
+                        print("Gemini API Endpoint '\(template)' Özeti/Şarkı Sözü Başarıyla Alındı!")
                         let lines = reply.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
                         
                         let actions = lines.filter { $0.contains("•") || $0.contains("-") || $0.contains("*") }
@@ -321,7 +317,7 @@ public final class VoiceAiManager {
                     }
                 }
             } catch {
-                print("Gemini Model '\(model)' API Hatası: \(error)")
+                print("Gemini API Ağ Hatası: \(error)")
             }
         }
         
