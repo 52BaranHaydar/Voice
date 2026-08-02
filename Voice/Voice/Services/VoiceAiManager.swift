@@ -9,11 +9,13 @@ public final class VoiceAiManager {
     public var apiKey: String = ""
     public var isProcessing: Bool = false
     
-    private let endpointTemplates = [
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=",
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=",
-        "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=",
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key="
+    // v1 API ile desteklenen, stabil model adları (en güncel önce)
+    private let audioModels = [
+        "gemini-2.0-flash",
+        "gemini-1.5-pro-latest",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash"
     ]
     
     public init(apiKey: String = "") {
@@ -25,34 +27,38 @@ public final class VoiceAiManager {
         }
     }
     
+    private var activeKey: String {
+        let savedKey = UserDefaults.standard.string(forKey: "gemini_api_key") ?? ""
+        return [apiKey, savedKey, Self.defaultApiKey]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty }) ?? ""
+    }
+    
     public func processAudioFileWithGemini(fileURL: URL, category: NoteCategory = .general) async -> (transcript: String, summary: String, actionItems: [String])? {
         guard let audioData = try? Data(contentsOf: fileURL), !audioData.isEmpty else {
             print("VoiceAiManager: Ses dosyası okunamadı veya boş.")
             return nil
         }
         
-        let base64Audio = audioData.base64EncodedString()
-        let savedKey = UserDefaults.standard.string(forKey: "gemini_api_key") ?? ""
-        let activeKey = [apiKey, savedKey, Self.defaultApiKey]
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: { !$0.isEmpty }) ?? ""
-            
-        guard !activeKey.isEmpty else {
+        let key = activeKey
+        guard !key.isEmpty else {
             print("VoiceAiManager: Aktif Gemini API Key bulunamadı.")
             return nil
         }
+        
+        let base64Audio = audioData.base64EncodedString()
         
         let promptText: String
         if category == .song {
             promptText = """
             Sen profesyonel bir Türk söz yazarı ve ses analistisisin.
-            Ektekı ses kaydını dinle ve yanıtını şu 3 açık bölümde ver:
+            Bu ses kaydını dinle ve yanıtını şu 3 bölümde ver:
             
             DÖKÜM:
-            [Ses kaydında konuşulan veya söylenen kelimelerin BİREBİR Türkçe metin dökümünü çıkar.]
+            [Ses kaydındaki konuşmanın BİREBİR Türkçe metin dökümünü çıkar.]
             
             ÖZET:
-            [Bu fikirden ilham alarak Şarkı İsmi, Müzik Tarzı (Pop/Akustik/Rock vb.), Giriş, Kıta 1, Nakarat, Kıta 2 ve Çıkış bölümlerinden oluşan ritmik Türkçe şarkı sözü beste üret.]
+            [Bu fikirden ilham alarak Şarkı İsmi, Müzik Tarzı, Giriş, Kıta 1, Nakarat, Kıta 2 ve Çıkış bölümlerinden oluşan ritmik Türkçe şarkı sözü üret.]
             
             AKSİYON:
             • 120 BPM Melodik Pop/Akustik Ritim Önerisi
@@ -61,10 +67,10 @@ public final class VoiceAiManager {
         } else {
             promptText = """
             Sen profesyonel bir Türkçe ses asistanısın.
-            Ektekı ses kaydını dinle ve yanıtını şu 3 açık bölümde ver:
+            Bu ses kaydını dinle ve yanıtını şu 3 bölümde ver:
             
             DÖKÜM:
-            [Ses kaydında konuşulan Türkçe kelimelerin BİREBİR metin dökümünü çıkar.]
+            [Ses kaydındaki konuşmanın BİREBİR Türkçe metin dökümünü çıkar.]
             
             ÖZET:
             [Ses kaydındaki ana konuyu açıklayan net ve öz bir Türkçe özet yaz.]
@@ -80,14 +86,12 @@ public final class VoiceAiManager {
                 [
                     "parts": [
                         [
-                            "inlineData": [
-                                "mimeType": "audio/m4a",
+                            "inline_data": [
+                                "mime_type": "audio/mp4",
                                 "data": base64Audio
                             ]
                         ],
-                        [
-                            "text": promptText
-                        ]
+                        ["text": promptText]
                     ]
                 ]
             ]
@@ -97,40 +101,47 @@ public final class VoiceAiManager {
             return nil
         }
         
-        for template in endpointTemplates {
-            guard let url = URL(string: template + activeKey) else { continue }
-            
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = httpBody
-            
-            do {
-                let (data, response) = try await URLSession.shared.data(for: request)
-                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-                print("Gemini Audio API Endpoint '\(template)' HTTP Durum Kodu: \(statusCode)")
+        // v1 endpoint ile dene (v1beta'ya göre daha geniş model desteği)
+        for model in audioModels {
+            for apiVersion in ["v1", "v1beta"] {
+                let urlStr = "https://generativelanguage.googleapis.com/\(apiVersion)/models/\(model):generateContent?key=\(key)"
+                guard let url = URL(string: urlStr) else { continue }
                 
-                if statusCode == 200 {
-                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let candidates = json["candidates"] as? [[String: Any]],
-                       let firstCandidate = candidates.first,
-                       let content = firstCandidate["content"] as? [String: Any],
-                       let parts = content["parts"] as? [[String: Any]],
-                       let reply = parts.first?["text"] as? String {
-                        
-                        print("Gemini Audio AI İşleme Başarılı!\n\(reply)")
-                        return parseGeminiAudioReply(reply)
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.timeoutInterval = 60
+                request.httpBody = httpBody
+                
+                do {
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    print("Gemini Audio [\(apiVersion)/\(model)] HTTP: \(statusCode)")
+                    
+                    if statusCode == 200 {
+                        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let candidates = json["candidates"] as? [[String: Any]],
+                           let firstCandidate = candidates.first,
+                           let content = firstCandidate["content"] as? [String: Any],
+                           let parts = content["parts"] as? [[String: Any]],
+                           let reply = parts.first?["text"] as? String {
+                            print("✅ Gemini Audio İşleme Başarılı [\(apiVersion)/\(model)]")
+                            return parseGeminiAudioReply(reply)
+                        }
+                    } else if statusCode == 404 {
+                        continue // Sonraki modeli dene
+                    } else {
+                        if let rawString = String(data: data, encoding: .utf8) {
+                            print("Gemini Audio [\(apiVersion)/\(model)] Yanıt (\(statusCode)): \(rawString)")
+                        }
                     }
-                } else {
-                    if let rawString = String(data: data, encoding: .utf8) {
-                        print("Gemini API Endpoint '\(template)' Yanıt (\(statusCode)): \(rawString)")
-                    }
+                } catch {
+                    print("Gemini Audio [\(apiVersion)/\(model)] Hata: \(error)")
                 }
-            } catch {
-                print("Gemini API Endpoint Hatası: \(error)")
             }
         }
         
+        print("VoiceAiManager: Tüm Gemini multimodal ses modelleri erişilemez. Apple Speech fallback kullanılacak.")
         return nil
     }
     
@@ -138,33 +149,28 @@ public final class VoiceAiManager {
         var transcript = ""
         var summary = ""
         var actions: [String] = []
-        
         var currentSection = ""
-        let lines = reply.components(separatedBy: "\n")
         
-        for line in lines {
+        for line in reply.components(separatedBy: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.uppercased().hasPrefix("DÖKÜM:") || trimmed.uppercased().hasPrefix("METİN DÖKÜMÜ:") {
+            if trimmed.uppercased().hasPrefix("DÖKÜM:") {
                 currentSection = "dokum"
-                let val = trimmed.replacingOccurrences(of: "DÖKÜM:", with: "").replacingOccurrences(of: "METİN DÖKÜMÜ:", with: "").trimmingCharacters(in: .whitespaces)
+                let val = trimmed.dropFirst("DÖKÜM:".count).trimmingCharacters(in: .whitespaces)
                 if !val.isEmpty { transcript += val + "\n" }
             } else if trimmed.uppercased().hasPrefix("ÖZET:") || trimmed.uppercased().hasPrefix("ŞARKI:") {
                 currentSection = "ozet"
-                let val = trimmed.replacingOccurrences(of: "ÖZET:", with: "").replacingOccurrences(of: "ŞARKI:", with: "").trimmingCharacters(in: .whitespaces)
+                let val = trimmed.dropFirst("ÖZET:".count).trimmingCharacters(in: .whitespaces)
                 if !val.isEmpty { summary += val + "\n" }
-            } else if trimmed.uppercased().hasPrefix("AKSİYON:") || trimmed.uppercased().hasPrefix("RİTİM:") {
+            } else if trimmed.uppercased().hasPrefix("AKSİYON:") {
                 currentSection = "aksiyon"
-            } else {
-                if currentSection == "dokum" && !trimmed.isEmpty {
-                    transcript += line + "\n"
-                } else if currentSection == "ozet" && !trimmed.isEmpty {
-                    summary += line + "\n"
-                } else if currentSection == "aksiyon" && !trimmed.isEmpty {
-                    if trimmed.hasPrefix("•") || trimmed.hasPrefix("-") || trimmed.hasPrefix("*") {
-                        actions.append(trimmed)
-                    } else {
-                        actions.append("• " + trimmed)
-                    }
+            } else if !trimmed.isEmpty {
+                switch currentSection {
+                case "dokum": transcript += line + "\n"
+                case "ozet": summary += line + "\n"
+                case "aksiyon":
+                    let bullet = (trimmed.hasPrefix("•") || trimmed.hasPrefix("-") || trimmed.hasPrefix("*")) ? trimmed : "• \(trimmed)"
+                    actions.append(bullet)
+                default: break
                 }
             }
         }
@@ -174,7 +180,7 @@ public final class VoiceAiManager {
         
         return (
             finalTranscript.isEmpty ? reply : finalTranscript,
-            finalSummary.isEmpty ? "Özet ses kaydından oluşturuldu." : finalSummary,
+            finalSummary.isEmpty ? "Ses kaydından özet çıkarıldı." : finalSummary,
             actions.isEmpty ? ["• Ses kaydı detayları incelenecektir."] : actions
         )
     }
@@ -184,17 +190,11 @@ public final class VoiceAiManager {
             return ("Ses kaydı için henüz metin dökümü bulunmuyor.", [])
         }
         
-        let savedKey = UserDefaults.standard.string(forKey: "gemini_api_key") ?? ""
-        let activeKey = [apiKey, savedKey, Self.defaultApiKey]
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: { !$0.isEmpty }) ?? ""
-        
-        if !activeKey.isEmpty {
-            return await generateGeminiSummary(text: text, category: category, key: activeKey)
-        } else {
-            print("VoiceAiManager: API Key bulunamadı, yerel akıllı özetleme kullanılıyor.")
-            return generateLocalSmartSummary(text: text, category: category)
+        let key = activeKey
+        if !key.isEmpty {
+            return await generateGeminiSummary(text: text, category: category, key: key)
         }
+        return generateLocalSmartSummary(text: text, category: category)
     }
     
     private func generateLocalSmartSummary(text: String, category: NoteCategory) -> (summary: String, actionItems: [String]) {
@@ -202,11 +202,7 @@ public final class VoiceAiManager {
             let firstLine = text.components(separatedBy: .newlines).first ?? text
             return (
                 "🎵 AI Şarkı Beste Önerisi: '\(firstLine.prefix(25))...'\n\n[Giriş]\nRitim yükselir yavaşça...\n\n[Kıta 1]\n\(text)\n\n[Nakarat]\nSesim dalgalanır ritimle beraber,\nYazılan her not bir beste eder.",
-                [
-                    "• Ritim Önerisi: 120 BPM Pop/Akustik Tempo",
-                    "• Vokal Tarzı: Melodik ve Hissiyatlı Dikte",
-                    "• Enstrümanlar: Akustik Gitar & Bas"
-                ]
+                ["• Ritim Önerisi: 120 BPM Pop/Akustik Tempo", "• Vokal Tarzı: Melodik ve Hissiyatlı Dikte"]
             )
         }
         
@@ -214,110 +210,69 @@ public final class VoiceAiManager {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         
-        let summaryText: String
-        if sentences.count <= 2 {
-            summaryText = "Özet: " + text
-        } else {
-            let firstTwo = sentences.prefix(2).joined(separator: ". ")
-            summaryText = "Özet: " + firstTwo + "."
-        }
+        let summaryText = sentences.count <= 2 ? "Özet: \(text)" : "Özet: \(sentences.prefix(2).joined(separator: ". "))."
         
-        let actionKeywords = ["yapılacak", "hazırlanacak", "edilecek", "tamamla", "görüş", "toplantı", "planla", "gönder", "yaz", "incele", "projeyi"]
-        var actions: [String] = []
-        
-        for sentence in sentences {
+        let actionKeywords = ["yapılacak", "hazırlanacak", "edilecek", "tamamla", "görüş", "toplantı", "planla", "gönder", "yaz", "incele"]
+        var actions = sentences.filter { sentence in
             let lower = sentence.lowercased()
-            if actionKeywords.contains(where: { lower.contains($0) }) {
-                actions.append("• " + sentence)
-            }
-        }
+            return actionKeywords.contains(where: { lower.contains($0) })
+        }.map { "• \($0)" }
         
         if actions.isEmpty {
-            actions = [
-                "• Ses kaydının ayrıntılarını gözden geçir.",
-                "• Not kategorisini ve başlığını güncelle."
-            ]
+            actions = ["• Ses kaydının ayrıntılarını gözden geçir.", "• Not kategorisini ve başlığını güncelle."]
         }
         
         return (summaryText, actions)
     }
     
     private func generateGeminiSummary(text: String, category: NoteCategory, key: String) async -> (summary: String, actionItems: [String]) {
-        let cleanKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        let prompt: String
-        if category == .song {
-            prompt = """
+        let prompt = category == .song ? """
             Sen profesyonel bir Türk söz yazarı ve müzik bestecisisin.
-            Aşağıdaki konuşma veya fikirden ilham alarak harika bir Türkçe şarkı beste ve sözü oluştur.
-            
-            Format:
-            1. Yanıtın ilk 2 satırında yaratıcı bir Şarkı İsmi ve Müzik Tarzı (Pop, Akustik, Rock vb.) belirt.
-            2. Sonrasında [Giriş], [Kıta 1], [Nakarat], [Kıta 2] ve [Çıkış] bölümlerinden oluşan ritmik şarkı sözlerini yaz.
-            3. En son kısımda madde işaretleri (•) kullanarak ritim/BPM ve enstrüman tavsiyelerini sırala.
-            
-            Konu/Fikir:
-            "\(text)"
+            Aşağıdaki fikirden harika bir Türkçe şarkı beste ve sözü oluştur.
+            [Giriş], [Kıta 1], [Nakarat], [Kıta 2] ve [Çıkış] bölümleriyle yaz.
+            Madde işaretleriyle (•) ritim/enstrüman tavsiyeleri ekle.
+            Konu: "\(text)"
+            """ : """
+            Aşağıdaki ses notu dökümünü Türkçe olarak analiz et:
+            1. Net ve öz bir özet çıkar.
+            2. Madde işaretleriyle (•) yapılacak işleri sırala.
+            Metin: "\(text)"
             """
-        } else {
-            prompt = """
-            Aşağıdaki ses notu metin dökümünü analiz et. Türkçe olarak:
-            1. İlk satırda net ve öz bir özet çıkar.
-            2. Sonraki satırlarda madde işaretleri (•) kullanarak yapılacak işleri liste şeklinde sırala.
-            
-            Metin:
-            "\(text)"
-            """
-        }
         
-        let jsonPayload: [String: Any] = [
-            "contents": [
-                [
-                    "parts": [
-                        ["text": prompt]
-                    ]
-                ]
-            ]
-        ]
-        
+        let jsonPayload: [String: Any] = ["contents": [["parts": [["text": prompt]]]]]
         guard let httpBody = try? JSONSerialization.data(withJSONObject: jsonPayload) else {
             return generateLocalSmartSummary(text: text, category: category)
         }
         
-        for template in endpointTemplates {
-            guard let url = URL(string: template + cleanKey) else { continue }
-            
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = httpBody
-            
-            do {
-                let (data, response) = try await URLSession.shared.data(for: request)
-                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        for model in ["gemini-2.0-flash", "gemini-1.5-flash-latest", "gemini-1.5-flash"] {
+            for apiVersion in ["v1", "v1beta"] {
+                let urlStr = "https://generativelanguage.googleapis.com/\(apiVersion)/models/\(model):generateContent?key=\(key)"
+                guard let url = URL(string: urlStr) else { continue }
                 
-                if statusCode == 200 {
-                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = httpBody
+                
+                do {
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    
+                    if statusCode == 200,
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let candidates = json["candidates"] as? [[String: Any]],
-                       let firstCandidate = candidates.first,
-                       let content = firstCandidate["content"] as? [String: Any],
+                       let content = candidates.first?["content"] as? [String: Any],
                        let parts = content["parts"] as? [[String: Any]],
                        let reply = parts.first?["text"] as? String {
                         
-                        print("Gemini API Endpoint '\(template)' Özeti/Şarkı Sözü Başarıyla Alındı!")
                         let lines = reply.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-                        
-                        let actions = lines.filter { $0.contains("•") || $0.contains("-") || $0.contains("*") }
-                        let summaryLines = lines.filter { !$0.contains("•") && !$0.contains("-") && !$0.contains("*") }
-                        
-                        let summary = summaryLines.joined(separator: "\n")
-                        let finalActions = actions.isEmpty ? ["• 120 BPM Melodik Ritim", "• Akustik & Bas Altyapı"] : Array(actions)
-                        
-                        return (summary, finalActions)
+                        let actions = lines.filter { $0.hasPrefix("•") || $0.hasPrefix("-") || $0.hasPrefix("*") }
+                        let summaryLines = lines.filter { !$0.hasPrefix("•") && !$0.hasPrefix("-") && !$0.hasPrefix("*") }
+                        return (summaryLines.joined(separator: "\n"), actions.isEmpty ? ["• Detayları inceleyin."] : actions)
+                    } else if statusCode != 404 {
+                        break
                     }
-                }
-            } catch {
-                print("Gemini API Ağ Hatası: \(error)")
+                } catch { continue }
             }
         }
         

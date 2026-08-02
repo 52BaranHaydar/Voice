@@ -482,26 +482,42 @@ public struct RecorderView: View {
             var finalSummary = ""
             var finalActions: [String] = []
             
-            // 1. Gemini Multimodal Audio Processing (Listens to the actual recorded .m4a audio file!)
-            if let result = await aiManager.processAudioFileWithGemini(fileURL: fileURL, category: selectedCategory) {
-                finalTranscript = result.transcript
-                finalSummary = result.summary
-                finalActions = result.actionItems
-            }
-            
-            // 2. Fallback if Gemini Multimodal Audio processing is offline or unavailable
-            if finalTranscript.isEmpty {
+            // 1. Önce kullanıcının düzenlediği ya da canlı döküm metnini kullan
+            if !customTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 finalTranscript = customTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-                if finalTranscript.isEmpty {
-                    finalTranscript = speechManager.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-                if finalTranscript.isEmpty || finalTranscript.hasPrefix("🎤 [Canlı Dikte Başlatıldı]: ") {
-                    finalTranscript = "Ses kaydı alındı. İçeriği yukarıdan veya detay sayfasından düzenleyebilirsiniz."
-                }
-                
                 let (summary, actions) = await aiManager.summarizeTranscription(finalTranscript, category: selectedCategory)
                 finalSummary = summary
                 finalActions = actions
+            }
+            
+            // 2. Gemini Multimodal Audio ile ses dosyasını dinle (API anahtarı varsa)
+            if finalTranscript.isEmpty {
+                if let result = await aiManager.processAudioFileWithGemini(fileURL: fileURL, category: selectedCategory) {
+                    finalTranscript = result.transcript
+                    finalSummary = result.summary
+                    finalActions = result.actionItems
+                }
+            }
+            
+            // 3. Apple SFSpeechRecognizer ile ses dosyasını analiz et (API gerektirmez)
+            if finalTranscript.isEmpty {
+                let appleTranscript = await speechManager.transcribeAudioFile(url: fileURL)
+                if !appleTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    finalTranscript = appleTranscript
+                    print("✅ Apple Speech fallback başarılı: \(finalTranscript)")
+                }
+                if !finalTranscript.isEmpty {
+                    let (summary, actions) = await aiManager.summarizeTranscription(finalTranscript, category: selectedCategory)
+                    finalSummary = summary
+                    finalActions = actions
+                }
+            }
+            
+            // 4. Son seçenek: düzenlenebilir varsayılan metin
+            if finalTranscript.isEmpty {
+                finalTranscript = "Ses kaydı alındı. Detay sayfasından metni düzenleyebilirsiniz."
+                finalSummary = "Ses kaydı başarıyla tamamlandı."
+                finalActions = ["• Ses kaydının ayrıntılarını gözden geçir.", "• Not kategorisini ve başlığını güncelle."]
             }
             
             let newNote = VoiceNote(
