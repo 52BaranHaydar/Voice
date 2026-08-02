@@ -9,13 +9,11 @@ public final class VoiceAiManager {
     public var apiKey: String = ""
     public var isProcessing: Bool = false
     
-    // v1 API ile desteklenen, stabil model adları (en güncel önce)
+    // v1 / v1beta API ile desteklenen, stabil model adları (en güncel önce)
     private let audioModels = [
+        "gemini-1.5-flash",
         "gemini-2.0-flash",
-        "gemini-1.5-pro-latest",
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash"
+        "gemini-1.5-pro"
     ]
     
     public init(apiKey: String = "") {
@@ -131,9 +129,8 @@ public final class VoiceAiManager {
                     } else if statusCode == 404 {
                         continue // Bu model yok, sonraki modeli dene
                     } else if statusCode == 429 {
-                        // Kota doldu — tüm modeller aynı kotayı paylaşır, devam etme
-                        print("⚠️ Gemini kota doldu (429). Gemini API atlanıyor.")
-                        return nil
+                        print("⚠️ Gemini [\(model)] kota doldu (429), sonraki model deneniyor...")
+                        continue // Farklı kotalara sahip sonraki modelleri dene (gemini-1.5-flash vb.)
                     } else {
                         if let rawString = String(data: data, encoding: .utf8) {
                             print("Gemini Audio [\(apiVersion)/\(model)] Yanıt (\(statusCode)): \(rawString)")

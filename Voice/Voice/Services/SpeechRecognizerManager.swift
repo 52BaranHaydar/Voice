@@ -82,35 +82,37 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
             return ""
         }
         
-        let request = SFSpeechURLRecognitionRequest(url: url)
-        request.shouldReportPartialResults = false
-        request.requiresOnDeviceRecognition = false
-        
-        print("🔄 transcribeAudioFile [\(targetLocale)]: Dosya analiz ediliyor: \(url.lastPathComponent)")
-        
-        let text: String = await withCheckedContinuation { cont in
-            var done = false
-            var best = ""
-            recognizer.recognitionTask(with: request) { result, error in
-                guard !done else { return }
-                if let r = result {
-                    best = r.bestTranscription.formattedString
-                    if r.isFinal {
+        for onDevice in [false, true] {
+            let request = SFSpeechURLRecognitionRequest(url: url)
+            request.shouldReportPartialResults = false
+            request.requiresOnDeviceRecognition = onDevice
+            
+            print("🔄 transcribeAudioFile [\(targetLocale)] (onDevice=\(onDevice)): Dosya analiz ediliyor: \(url.lastPathComponent)")
+            
+            let text: String = await withCheckedContinuation { cont in
+                var done = false
+                var best = ""
+                recognizer.recognitionTask(with: request) { result, error in
+                    guard !done else { return }
+                    if let r = result {
+                        best = r.bestTranscription.formattedString
+                        if r.isFinal {
+                            done = true
+                            cont.resume(returning: best)
+                        }
+                    }
+                    if let e = error {
                         done = true
+                        print("⚠️ transcribeAudioFile [\(targetLocale) onDevice=\(onDevice)] hatası: \(e.localizedDescription)")
                         cont.resume(returning: best)
                     }
                 }
-                if let e = error {
-                    done = true
-                    print("⚠️ transcribeAudioFile [\(targetLocale)] hatası: \(e.localizedDescription)")
-                    cont.resume(returning: best)
-                }
             }
-        }
-        
-        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            print("✅ SpeechRecognizer [\(targetLocale) dosya]: \"\(text)\"")
-            return text
+            
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                print("✅ SpeechRecognizer [\(targetLocale) dosya]: \"\(text)\"")
+                return text
+            }
         }
         
         print("❌ transcribeAudioFile: [\(targetLocale)] dilinde sonuç alınamadı.")
