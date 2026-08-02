@@ -45,6 +45,14 @@ public final class VoiceAiManager {
         }
         
         let base64Audio = audioData.base64EncodedString()
+        let mimeType: String
+        switch fileURL.pathExtension.lowercased() {
+        case "wav": mimeType = "audio/wav"
+        case "m4a", "mp4": mimeType = "audio/mp4"
+        case "caf": mimeType = "audio/x-caf"
+        case "aiff", "aif": mimeType = "audio/aiff"
+        default: mimeType = "audio/mp4"
+        }
         
         let promptText: String
         if category == .song {
@@ -85,7 +93,7 @@ public final class VoiceAiManager {
                     "parts": [
                         [
                             "inline_data": [
-                                "mime_type": "audio/mp4",
+                                "mime_type": mimeType,
                                 "data": base64Audio
                             ]
                         ],
