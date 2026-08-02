@@ -319,18 +319,19 @@ public struct RecorderView: View {
                 _ = await speechManager.requestAuthorization()
                 
                 // Canlı transkripsiyon için buffer request başlat
-                if let recognitionRequest = speechManager.startLiveTranscribingWithBuffers() {
-                    // AudioRecorderManager'ın her buffer'ını Speech'e ilet
+                if let _ = speechManager.startLiveTranscribingWithBuffers() {
                     recorderManager.onAudioBuffer = { [weak speechManager] buffer in
                         speechManager?.appendBuffer(buffer)
                     }
                 } else {
-                    // Yetkilendirme yoksa buffer callback olmadan kaydet
                     recorderManager.onAudioBuffer = nil
                 }
                 
                 recorderManager.startRecording()
                 isPulseAnimating = true
+                
+                // Periyodik dosya okuma görevi (canlı metin kutusunu 1.5 saniyede bir günceller)
+                startLivePollingTask()
             }
         } else if recorderManager.isPaused {
             recorderManager.resumeRecording()
@@ -338,6 +339,28 @@ public struct RecorderView: View {
             recorderManager.pauseRecording()
         }
     }
+    
+    private func startLivePollingTask() {
+        Task {
+            // İlk okuma için 1 saniye bekle
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            
+            while recorderManager.isRecording {
+                if !recorderManager.isPaused, let fileName = recorderManager.currentRecordingFileName {
+                    let fileURL = recorderManager.getAudioFileURL(fileName: fileName)
+                    let text = await speechManager.transcribeAudioFile(url: fileURL)
+                    if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        await MainActor.run {
+                            self.speechManager.liveTranscript = text
+                            print("📺 Periyodik Canlı Metin Güncellendi: \"\(text)\"")
+                        }
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5s aralıklarla
+            }
+        }
+    }
+
     
     private func cancelRecording() {
         _ = recorderManager.stopRecording()

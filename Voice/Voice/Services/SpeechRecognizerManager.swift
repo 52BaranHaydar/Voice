@@ -5,7 +5,7 @@ import AVFoundation
 /// SpeechRecognizerManager
 /// MainActor - UI state yönetimi için
 /// Önemli: liveRequest nonisolated(unsafe) olarak saklanır,
-/// böylece AVAudioEngine tap'inin gerçek zamanlı audio thread'inden kilitlenme (deadlock) olmadan erişilir.
+/// böylece AVAudioEngine tap'inin gerçek zamanlı audio thread'inden kilitlenme olmadan erişilir.
 @MainActor
 @Observable
 public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate {
@@ -41,7 +41,6 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
             }
         }
         
-        // Son çare: varsayılan recognizer
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "tr-TR")) ?? SFSpeechRecognizer()
         speechRecognizer?.delegate = self
         speechRecognizer?.defaultTaskHint = .dictation
@@ -53,6 +52,7 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
             SFSpeechRecognizer.requestAuthorization { status in
                 Task { @MainActor in
                     self.isAvailable = (status == .authorized)
+                    print("🎙️ SpeechManager Yetki Durumu: \(status.rawValue) (Authorized = \(status == .authorized))")
                     continuation.resume(returning: status == .authorized)
                 }
             }
@@ -60,10 +60,10 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
     }
     
     // MARK: - Live Transcription (Buffer-Based)
-    /// AVAudioEngine tap'inden gelen buffer'ları anlık kabul eder.
     public func startLiveTranscribingWithBuffers() -> SFSpeechAudioBufferRecognitionRequest? {
-        guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
-            print("⚠️ SpeechManager: Konuşma tanıma izni yok.")
+        let status = SFSpeechRecognizer.authorizationStatus()
+        guard status == .authorized else {
+            print("⚠️ SpeechManager: Konuşma tanıma izni yetersiz (Status: \(status.rawValue))")
             return nil
         }
         
@@ -93,17 +93,13 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
                     let text = result.bestTranscription.formattedString
                     if !text.isEmpty {
                         self.liveTranscript = text
-                        print("🎙️ Canlı Metin: \"\(text)\"")
+                        print("🎙️ CANLI YAZI GELDİ: \"\(text)\"")
                     }
                 }
                 
                 if let error = error {
                     let code = (error as NSError).code
-                    // 209, 216, 300, 301, 1110 normal bitiş/iptal kodlarıdır
-                    let normalCodes: Set<Int> = [209, 216, 300, 301, 1110]
-                    if !normalCodes.contains(code) {
-                        print("⚠️ SpeechManager canlı hata [\(code)]: \(error.localizedDescription)")
-                    }
+                    print("ℹ️ SpeechManager canlı task bildirimi [\(code)]: \(error.localizedDescription)")
                 }
             }
         }
@@ -125,7 +121,6 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         isTranscribing = false
     }
     
-    // Eski API uyumluluğu
     public func startLiveTranscribing() {}
     public func stopTranscribing() { stopLiveTranscribing() }
     
@@ -134,34 +129,26 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         setupRecognizer(locale: code)
     }
     
-    // MARK: - File Transcription (Kayıt bittikten sonra yedek yöntem)
+    // MARK: - File Transcription (Periyodik veya kayıt sonu)
     public func transcribeAudioFile(url: URL) async -> String {
-        let authGranted = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            let status = SFSpeechRecognizer.authorizationStatus()
-            if status == .authorized {
-                cont.resume(returning: true)
-            } else {
-                SFSpeechRecognizer.requestAuthorization { s in
-                    cont.resume(returning: s == .authorized)
-                }
-            }
+        let status = SFSpeechRecognizer.authorizationStatus()
+        guard status == .authorized else {
+            print("⚠️ transcribeAudioFile: İzin yetersiz (\(status.rawValue))")
+            return ""
         }
-        guard authGranted else { return "" }
         
         guard FileManager.default.fileExists(atPath: url.path) else {
-            print("❌ SpeechRecognizer: Dosya yok: \(url.lastPathComponent)")
             return ""
         }
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
         guard size > 500 else {
-            print("❌ SpeechRecognizer: Dosya çok küçük (\(size) bytes)")
             return ""
         }
         
         #if os(iOS)
         do {
             let s = AVAudioSession.sharedInstance()
-            try s.setCategory(.playback, mode: .default)
+            try s.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
             try s.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             print("⚠️ AVAudioSession: \(error.localizedDescription)")
@@ -176,20 +163,18 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
             request.shouldReportPartialResults = false
             request.requiresOnDeviceRecognition = false
             
-            print("🔄 SpeechRecognizer [\(locale)]: Dosyadan transkripsiyon...")
-            
             let text: String = await withCheckedContinuation { cont in
                 var done = false
                 var best = ""
                 recognizer.recognitionTask(with: request) { result, error in
                     guard !done else { return }
                     if let r = result { best = r.bestTranscription.formattedString; if r.isFinal { done = true; cont.resume(returning: best) } }
-                    if let e = error { done = true; print("❌ [\(locale)] \(e.localizedDescription)"); cont.resume(returning: best) }
+                    if let e = error { done = true; cont.resume(returning: best) }
                 }
             }
             
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                print("✅ SpeechRecognizer [\(locale)]: \"\(text)\"")
+                print("✅ SpeechRecognizer [\(locale) dosya]: \"\(text)\"")
                 return text
             }
         }
