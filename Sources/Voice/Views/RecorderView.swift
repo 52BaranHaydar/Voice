@@ -8,6 +8,7 @@ public struct RecorderView: View {
     @State private var aiManager = VoiceAiManager()
     
     @State private var noteTitle: String = ""
+    @State private var customTranscript: String = ""
     @State private var selectedCategory: NoteCategory = .general
     @State private var isPulseAnimating: Bool = false
     @State private var showSaveSheet: Bool = false
@@ -324,6 +325,12 @@ public struct RecorderView: View {
         speechManager.stopTranscribing()
         isPulseAnimating = false
         noteTitle = "Ses Notu \(voiceNotes.count + 1)"
+        
+        var transcript = speechManager.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if transcript.hasPrefix("🎤 [Canlı Dikte Başlatıldı]: ") {
+            transcript = String(transcript.dropFirst("🎤 [Canlı Dikte Başlatıldı]: ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        customTranscript = transcript
         showSaveSheet = true
     }
     
@@ -350,6 +357,24 @@ public struct RecorderView: View {
                         .foregroundColor(VoiceTheme.textSecondary)
                     TextField("Başlık girin...", text: $noteTitle)
                         .padding()
+                        .background(VoiceTheme.bgCard)
+                        .cornerRadius(14)
+                        .foregroundColor(.white)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(VoiceTheme.bgCardBorder, lineWidth: 1)
+                        )
+                }
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Konuşma Metni (Düzenlenebilir)")
+                        .font(.caption.bold())
+                        .foregroundColor(VoiceTheme.textSecondary)
+                    
+                    TextEditor(text: $customTranscript)
+                        .frame(height: 80)
+                        .padding(6)
+                        .scrollContentBackground(.hidden)
                         .background(VoiceTheme.bgCard)
                         .cornerRadius(14)
                         .foregroundColor(.white)
@@ -429,13 +454,9 @@ public struct RecorderView: View {
         
         isProcessingAi = true
         Task {
-            var finalTranscript = speechManager.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            var finalTranscript = customTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
             
-            if finalTranscript.hasPrefix("🎤 [Canlı Dikte Başlatıldı]: ") {
-                finalTranscript = String(finalTranscript.dropFirst("🎤 [Canlı Dikte Başlatıldı]: ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            
-            if finalTranscript.isEmpty || finalTranscript == "Ses kaydı dökümü alındı." {
+            if finalTranscript.isEmpty {
                 let fileURL = recorderManager.getAudioFileURL(fileName: fileName)
                 let fileTranscript = await speechManager.transcribeAudioFile(url: fileURL)
                 if !fileTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -444,7 +465,11 @@ public struct RecorderView: View {
             }
             
             if finalTranscript.isEmpty {
-                finalTranscript = "Ses kaydı alındı. İçeriği yukarıdan düzenleyebilirsiniz."
+                finalTranscript = speechManager.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            
+            if finalTranscript.isEmpty || finalTranscript.hasPrefix("🎤 [Canlı Dikte Başlatıldı]: ") {
+                finalTranscript = "Ses kaydı alındı. İçeriği istediğiniz zaman düzenleyebilirsiniz."
             }
             
             let (summary, actions) = await aiManager.summarizeTranscription(finalTranscript, category: selectedCategory)

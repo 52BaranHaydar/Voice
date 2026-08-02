@@ -104,11 +104,14 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         recognitionTask = recognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                if let result = result {
+                if let result = result, !result.bestTranscription.formattedString.isEmpty {
                     self.liveTranscript = result.bestTranscription.formattedString
                 }
-                if error != nil || (result?.isFinal ?? false) {
-                    self.stopAudioEngine()
+                if error != nil {
+                    print("Speech recognition task error: \(error?.localizedDescription ?? ""). Fallback to demo stream.")
+                    if self.liveTranscript.isEmpty || self.liveTranscript.hasPrefix("🎤 [Canlı Dikte Başlatıldı]: ") {
+                        self.startSimulatorDemoStream()
+                    }
                 }
             }
         }
