@@ -30,16 +30,12 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
     }
     
     private func setupRecognizer(locale: String) {
-        if let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)) {
-            speechRecognizer = recognizer
-        } else if let fallback = SFSpeechRecognizer(locale: Locale(identifier: "tr-TR")) {
-            speechRecognizer = fallback
-        } else {
-            speechRecognizer = SFSpeechRecognizer()
-        }
+        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: locale))
+            ?? SFSpeechRecognizer(locale: Locale(identifier: "tr-TR"))
+            ?? SFSpeechRecognizer()
         speechRecognizer?.delegate = self
         speechRecognizer?.defaultTaskHint = .dictation
-        print("✅ SpeechManager: SFSpeechRecognizer hazır (\(speechRecognizer?.locale.identifier ?? "unknown"))")
+        print("✅ SpeechManager: SFSpeechRecognizer hazır (\(speechRecognizer?.locale.identifier ?? locale))")
     }
     
     // MARK: - Authorization
@@ -89,7 +85,7 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
                     let text = result.bestTranscription.formattedString
                     if !text.isEmpty {
                         self.liveTranscript = text
-                        print("🎙️ CANLI YAZI GELDİ: \"\(text)\"")
+                        print("🎙️ CANLI YAZI GELDİ [\(recognizer.locale.identifier)]: \"\(text)\"")
                     }
                 }
                 
@@ -146,49 +142,52 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         #if os(iOS)
         do {
             let s = AVAudioSession.sharedInstance()
-            try s.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+            try s.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetooth])
             try s.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             print("⚠️ AVAudioSession: \(error.localizedDescription)")
         }
         #endif
         
-        for locale in [selectedLanguageCode, "tr-TR", "en-US", Locale.current.identifier] {
-            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)) else { continue }
-            
-            let request = SFSpeechURLRecognitionRequest(url: url)
-            request.shouldReportPartialResults = false
-            request.requiresOnDeviceRecognition = false
-            
-            print("🔄 transcribeAudioFile [\(locale)]: Başlatılıyor...")
-            
-            let text: String = await withCheckedContinuation { cont in
-                var done = false
-                var best = ""
-                recognizer.recognitionTask(with: request) { result, error in
-                    guard !done else { return }
-                    if let r = result {
-                        best = r.bestTranscription.formattedString
-                        if r.isFinal {
-                            done = true
-                            cont.resume(returning: best)
-                        }
-                    }
-                    if let e = error {
+        // ÖNEMLİ: İngilizce (en-US) fallback kaldırıldı! Sadece seçilen dil (tr-TR) kullanılır.
+        let targetLocale = selectedLanguageCode.isEmpty ? "tr-TR" : selectedLanguageCode
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: targetLocale)) else {
+            print("❌ transcribeAudioFile: [\(targetLocale)] tanıyıcı oluşturulamadı.")
+            return ""
+        }
+        
+        let request = SFSpeechURLRecognitionRequest(url: url)
+        request.shouldReportPartialResults = false
+        request.requiresOnDeviceRecognition = false
+        
+        print("🔄 transcribeAudioFile [\(targetLocale)]: Dosya analiz ediliyor...")
+        
+        let text: String = await withCheckedContinuation { cont in
+            var done = false
+            var best = ""
+            recognizer.recognitionTask(with: request) { result, error in
+                guard !done else { return }
+                if let r = result {
+                    best = r.bestTranscription.formattedString
+                    if r.isFinal {
                         done = true
-                        print("⚠️ transcribeAudioFile [\(locale)] hatası: \(e.localizedDescription)")
                         cont.resume(returning: best)
                     }
                 }
-            }
-            
-            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                print("✅ SpeechRecognizer [\(locale) dosya]: \"\(text)\"")
-                return text
+                if let e = error {
+                    done = true
+                    print("⚠️ transcribeAudioFile [\(targetLocale)] hatası: \(e.localizedDescription)")
+                    cont.resume(returning: best)
+                }
             }
         }
         
-        print("❌ transcribeAudioFile: Tüm dillerde sonuç boş döndü.")
+        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            print("✅ SpeechRecognizer [\(targetLocale) dosya]: \"\(text)\"")
+            return text
+        }
+        
+        print("❌ transcribeAudioFile: [\(targetLocale)] dilinde sonuç alınamadı.")
         return ""
     }
     
