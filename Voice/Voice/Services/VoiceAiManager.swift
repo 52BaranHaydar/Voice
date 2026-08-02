@@ -9,6 +9,13 @@ public final class VoiceAiManager {
     public var apiKey: String = ""
     public var isProcessing: Bool = false
     
+    private let modelCandidates = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash"
+    ]
+    
     public init(apiKey: String = "") {
         if !apiKey.isEmpty {
             self.apiKey = apiKey
@@ -30,7 +37,7 @@ public final class VoiceAiManager {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first(where: { !$0.isEmpty }) ?? ""
             
-        guard !activeKey.isEmpty, let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=\(activeKey)") else {
+        guard !activeKey.isEmpty else {
             print("VoiceAiManager: Aktif Gemini API Key bulunamadı.")
             return nil
         }
@@ -90,33 +97,40 @@ public final class VoiceAiManager {
             return nil
         }
         
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = httpBody
-        
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse {
-                print("Gemini Multimodal Audio API HTTP Durum Kodu: \(httpResponse.statusCode)")
+        for model in modelCandidates {
+            guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(activeKey)") else {
+                continue
             }
             
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let candidates = json["candidates"] as? [[String: Any]],
-               let firstCandidate = candidates.first,
-               let content = firstCandidate["content"] as? [String: Any],
-               let parts = content["parts"] as? [[String: Any]],
-               let reply = parts.first?["text"] as? String {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = httpBody
+            
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                print("Gemini Model '\(model)' Multimodal Audio API HTTP Durum Kodu: \(statusCode)")
                 
-                print("Gemini Audio AI İşleme Başarılı!\n\(reply)")
-                return parseGeminiAudioReply(reply)
-            } else {
-                if let rawString = String(data: data, encoding: .utf8) {
-                    print("Gemini Audio API Ham Yanıt: \(rawString)")
+                if statusCode == 200 {
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let candidates = json["candidates"] as? [[String: Any]],
+                       let firstCandidate = candidates.first,
+                       let content = firstCandidate["content"] as? [String: Any],
+                       let parts = content["parts"] as? [[String: Any]],
+                       let reply = parts.first?["text"] as? String {
+                        
+                        print("Gemini Model '\(model)' Audio AI İşleme Başarılı!\n\(reply)")
+                        return parseGeminiAudioReply(reply)
+                    }
+                } else {
+                    if let rawString = String(data: data, encoding: .utf8) {
+                        print("Gemini Model '\(model)' Yanıt (\(statusCode)): \(rawString)")
+                    }
                 }
+            } catch {
+                print("Gemini Model '\(model)' API Hatası: \(error)")
             }
-        } catch {
-            print("Gemini Audio API Hatası: \(error)")
         }
         
         return nil
@@ -232,10 +246,6 @@ public final class VoiceAiManager {
     
     private func generateGeminiSummary(text: String, category: NoteCategory, key: String) async -> (summary: String, actionItems: [String]) {
         let cleanKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=\(cleanKey)") else {
-            print("Gemini API Error: Geçersiz URL veya API Key")
-            return generateLocalSmartSummary(text: text, category: category)
-        }
         
         let prompt: String
         if category == .song {
@@ -276,41 +286,43 @@ public final class VoiceAiManager {
             return generateLocalSmartSummary(text: text, category: category)
         }
         
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = httpBody
-        
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse {
-                print("Gemini API HTTP Durum Kodu: \(httpResponse.statusCode)")
+        for model in modelCandidates {
+            guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(cleanKey)") else {
+                continue
             }
             
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let candidates = json["candidates"] as? [[String: Any]],
-               let firstCandidate = candidates.first,
-               let content = firstCandidate["content"] as? [String: Any],
-               let parts = content["parts"] as? [[String: Any]],
-               let reply = parts.first?["text"] as? String {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = httpBody
+            
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
                 
-                print("Gemini AI Özeti/Şarkı Sözü Başarıyla Alındı!")
-                let lines = reply.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-                
-                let actions = lines.filter { $0.contains("•") || $0.contains("-") || $0.contains("*") }
-                let summaryLines = lines.filter { !$0.contains("•") && !$0.contains("-") && !$0.contains("*") }
-                
-                let summary = summaryLines.joined(separator: "\n")
-                let finalActions = actions.isEmpty ? ["• 120 BPM Melodik Ritim", "• Akustik & Bas Altyapı"] : Array(actions)
-                
-                return (summary, finalActions)
-            } else {
-                if let rawString = String(data: data, encoding: .utf8) {
-                    print("Gemini API Ham Yanıt: \(rawString)")
+                if statusCode == 200 {
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let candidates = json["candidates"] as? [[String: Any]],
+                       let firstCandidate = candidates.first,
+                       let content = firstCandidate["content"] as? [String: Any],
+                       let parts = content["parts"] as? [[String: Any]],
+                       let reply = parts.first?["text"] as? String {
+                        
+                        print("Gemini Model '\(model)' Özeti/Şarkı Sözü Başarıyla Alındı!")
+                        let lines = reply.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                        
+                        let actions = lines.filter { $0.contains("•") || $0.contains("-") || $0.contains("*") }
+                        let summaryLines = lines.filter { !$0.contains("•") && !$0.contains("-") && !$0.contains("*") }
+                        
+                        let summary = summaryLines.joined(separator: "\n")
+                        let finalActions = actions.isEmpty ? ["• 120 BPM Melodik Ritim", "• Akustik & Bas Altyapı"] : Array(actions)
+                        
+                        return (summary, finalActions)
+                    }
                 }
+            } catch {
+                print("Gemini Model '\(model)' API Hatası: \(error)")
             }
-        } catch {
-            print("Gemini API Ağ Hatası: \(error)")
         }
         
         return generateLocalSmartSummary(text: text, category: category)
