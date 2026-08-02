@@ -104,7 +104,7 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
     }
     
     public func transcribeAudioFile(url: URL) async -> String {
-        // Önce yetkilendirme isteği
+        // 1. Yetkilendirme kontrolü
         let authGranted = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
             let current = SFSpeechRecognizer.authorizationStatus()
             if current == .authorized {
@@ -117,22 +117,55 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         }
         
         guard authGranted else {
-            print("SpeechRecognizer: Yetkilendirme reddedildi.")
+            print("❌ SpeechRecognizer: Yetkilendirme reddedildi.")
             return ""
         }
         
-        // Seçili dili dene; başarısız olursa en-US ile dene
-        let localesToTry: [String] = [selectedLanguageCode, "tr-TR", "en-US"]
+        // 2. Dosya var mı kontrol et
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            print("❌ SpeechRecognizer: Dosya bulunamadı: \(url.path)")
+            return ""
+        }
+        
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        print("🎙️ SpeechRecognizer: Dosya boyutu = \(fileSize) bytes, URL = \(url.lastPathComponent)")
+        
+        guard fileSize > 1000 else {
+            print("❌ SpeechRecognizer: Dosya çok küçük, ses kaydı boş olabilir.")
+            return ""
+        }
+        
+        // 3. AVAudioSession'ı kayıt modundan çıkar — bu olmadan SFSpeech çalışmaz!
+        #if os(iOS)
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, options: [])
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
+            print("✅ AVAudioSession: playback moduna geçildi")
+        } catch {
+            print("⚠️ AVAudioSession ayarlanamadı: \(error.localizedDescription)")
+        }
+        #endif
+        
+        // 4. Sırayla Türkçe → İngilizce dene
+        let localesToTry = [selectedLanguageCode, "tr-TR", "en-US"]
         
         for locale in localesToTry {
-            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)),
-                  recognizer.isAvailable else { continue }
+            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)) else {
+                print("⚠️ SpeechRecognizer [\(locale)]: Tanıyıcı oluşturulamadı")
+                continue
+            }
+            
+            if !recognizer.isAvailable {
+                print("⚠️ SpeechRecognizer [\(locale)]: isAvailable = false")
+                continue
+            }
             
             let request = SFSpeechURLRecognitionRequest(url: url)
             request.shouldReportPartialResults = false
-            request.addsPunctuation = true
+            request.requiresOnDeviceRecognition = false
             
-            print("SpeechRecognizer: \(locale) ile transkripsiyon başlıyor...")
+            print("🔄 SpeechRecognizer [\(locale)]: Transkripsiyon başlıyor...")
             
             let result: String = await withCheckedContinuation { continuation in
                 var hasResumed = false
@@ -145,13 +178,14 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
                         bestSoFar = r.bestTranscription.formattedString
                         if r.isFinal {
                             hasResumed = true
-                            print("✅ SpeechRecognizer [\(locale)]: \(bestSoFar)")
+                            print("✅ SpeechRecognizer [\(locale)]: \"\(bestSoFar)\"")
                             continuation.resume(returning: bestSoFar)
                         }
                     }
                     
                     if let err = error {
-                        print("SpeechRecognizer [\(locale)] hata: \(err.localizedDescription)")
+                        let nsErr = err as NSError
+                        print("❌ SpeechRecognizer [\(locale)] hata \(nsErr.code): \(err.localizedDescription)")
                         if !hasResumed {
                             hasResumed = true
                             continuation.resume(returning: bestSoFar)
@@ -165,6 +199,7 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
             }
         }
         
+        print("❌ SpeechRecognizer: Tüm dil denemeleri başarısız.")
         return ""
     }
 }
