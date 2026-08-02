@@ -9,26 +9,22 @@ public final class AudioRecorderManager: NSObject, AVAudioRecorderDelegate {
     public var recordingTime: TimeInterval = 0
     public var liveAudioLevels: [Float] = []
     public var currentRecordingFileName: String?
-    public var isSimulatorMode: Bool = false
     
     // Canlı ses buffer'larını Speech Recognition'a iletmek için callback
-    // Yalnızca gerçek cihazda ve AVAudioEngine kullanıldığında çağrılır
     public var onAudioBuffer: ((AVAudioPCMBuffer) -> Void)?
     
-    // Simülatör için: AVAudioRecorder (gerçek dosya yazar)
-    private var audioRecorder: AVAudioRecorder?
-    
-    // Gerçek cihaz için: AVAudioEngine (hem dosya yazar hem buffer iletir)
+    // AVAudioEngine: hem dosya yazar hem canlı buffer'ları speech engine'e iletir
     private let audioEngine = AVAudioEngine()
     private var audioFile: AVAudioFile?
+    
+    // Fallback için AVAudioRecorder
+    private var audioRecorder: AVAudioRecorder?
+    private var isUsingFallbackRecorder: Bool = false
     
     private var timer: Timer?
     
     public override init() {
         super.init()
-        #if targetEnvironment(simulator)
-        self.isSimulatorMode = true
-        #endif
     }
     
     public func requestPermissions() async -> Bool {
@@ -47,76 +43,31 @@ public final class AudioRecorderManager: NSObject, AVAudioRecorderDelegate {
         let fileName = "VoiceNote_\(UUID().uuidString).m4a"
         let fileURL = getDocumentsDirectory().appendingPathComponent(fileName)
         currentRecordingFileName = fileName
+        isUsingFallbackRecorder = false
         
-        #if targetEnvironment(simulator)
-        startRecordingSimulator(fileURL: fileURL, fileName: fileName)
-        #else
         startRecordingEngine(fileURL: fileURL, fileName: fileName)
-        #endif
     }
     
-    // MARK: - Simülatör Kayıt (AVAudioRecorder — gerçek .m4a dosyası oluşturur)
-    
-    private func startRecordingSimulator(fileURL: URL, fileName: String) {
-        #if os(iOS)
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
-            try session.setActive(true)
-        } catch {
-            print("AudioRecorderManager: AVAudioSession hatası: \(error)")
-        }
-        #endif
-        
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 44100.0,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
-        
-        do {
-            audioRecorder = try AVAudioRecorder(url: fileURL, settings: settings)
-            audioRecorder?.delegate = self
-            audioRecorder?.isMeteringEnabled = true
-            audioRecorder?.record()
-            print("✅ AudioRecorderManager [Simülatör]: AVAudioRecorder başladı — \(fileName)")
-        } catch {
-            print("⚠️ AudioRecorderManager [Simülatör]: AVAudioRecorder başlatılamadı: \(error)")
-            // Simülatörde gerçek ses yok, yine de boş dosya oluştur
-            FileManager.default.createFile(atPath: fileURL.path, contents: Data(), attributes: nil)
-        }
-        
-        isRecording = true
-        isPaused = false
-        recordingTime = 0
-        liveAudioLevels.removeAll()
-        startTimer()
-    }
-    
-    // MARK: - Gerçek Cihaz Kayıt (AVAudioEngine — canlı buffer akışı destekler)
+    // MARK: - AVAudioEngine Kayıt (Canlı buffer akışı ile hem dosya yazar hem transkripsiyon besler)
     
     private func startRecordingEngine(fileURL: URL, fileName: String) {
         #if os(iOS)
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement, options: [.allowBluetooth])
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
             try session.setActive(true)
         } catch {
             print("AudioRecorderManager: AVAudioSession hatası: \(error)")
-            // AVAudioSession başarısız olursa AVAudioRecorder ile fallback
-            startRecordingSimulator(fileURL: fileURL, fileName: fileName)
-            return
         }
         #endif
         
         let inputNode = audioEngine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
         
-        // m4a hedef dosyası
+        // m4a hedef dosya ayarları (AAC)
         let settings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: inputFormat.sampleRate,
+            AVSampleRateKey: inputFormat.sampleRate > 0 ? inputFormat.sampleRate : 44100.0,
             AVNumberOfChannelsKey: 1,
             AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
         ]
@@ -124,22 +75,22 @@ public final class AudioRecorderManager: NSObject, AVAudioRecorderDelegate {
         do {
             audioFile = try AVAudioFile(forWriting: fileURL, settings: settings)
         } catch {
-            print("AudioRecorderManager: AVAudioFile oluşturulamadı: \(error). AVAudioRecorder'a düşüyoruz.")
-            startRecordingSimulator(fileURL: fileURL, fileName: fileName)
+            print("AudioRecorderManager: AVAudioFile oluşturulamadı: \(error). Fallback'e geçiliyor.")
+            startFallbackRecorder(fileURL: fileURL, fileName: fileName)
             return
         }
         
-        // Tek tap: dosyaya yaz + speech buffer'a ilet + seviye hesapla
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
+        // Audio tap: Her 1024-4096 örnekte bir tetiklenir
+        inputNode.installTap(onBus: 0, bufferSize: 2048, format: inputFormat) { [weak self] buffer, _ in
             guard let self = self else { return }
             
-            // 1. Dosyaya yaz
+            // 1. Dosyaya kaydet
             try? self.audioFile?.write(from: buffer)
             
-            // 2. Speech recognition'a ilet
+            // 2. Canlı konuşma tanıyıcıya buffer ilet
             self.onAudioBuffer?(buffer)
             
-            // 3. Ses seviyesi ölçümü
+            // 3. Ses dalgası seviyesini hesapla
             if let channelData = buffer.floatChannelData?[0] {
                 let frameCount = Int(buffer.frameLength)
                 guard frameCount > 0 else { return }
@@ -147,6 +98,7 @@ public final class AudioRecorderManager: NSObject, AVAudioRecorderDelegate {
                 for i in 0..<frameCount { rms += channelData[i] * channelData[i] }
                 rms = sqrt(rms / Float(frameCount))
                 let normalized = max(0.05, min(1.0, rms * 12.0))
+                
                 Task { @MainActor [weak self] in
                     guard let self = self, self.isRecording, !self.isPaused else { return }
                     self.liveAudioLevels.append(normalized)
@@ -162,19 +114,48 @@ public final class AudioRecorderManager: NSObject, AVAudioRecorderDelegate {
             recordingTime = 0
             liveAudioLevels.removeAll()
             startTimer()
-            print("✅ AudioRecorderManager [Gerçek Cihaz]: AVAudioEngine başladı — \(fileName)")
+            print("✅ AudioRecorderManager: AVAudioEngine ile kayıt başladı — \(fileName)")
         } catch {
-            print("AudioRecorderManager: AVAudioEngine başlatılamadı: \(error)")
+            print("AudioRecorderManager: AVAudioEngine başlatılamadı: \(error). Fallback kullanılıyor.")
             inputNode.removeTap(onBus: 0)
             audioFile = nil
-            startRecordingSimulator(fileURL: fileURL, fileName: fileName)
+            startFallbackRecorder(fileURL: fileURL, fileName: fileName)
         }
+    }
+    
+    // MARK: - Fallback Kayıt (AVAudioRecorder)
+    
+    private func startFallbackRecorder(fileURL: URL, fileName: String) {
+        isUsingFallbackRecorder = true
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: 44100.0,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+        ]
+        
+        do {
+            audioRecorder = try AVAudioRecorder(url: fileURL, settings: settings)
+            audioRecorder?.delegate = self
+            audioRecorder?.isMeteringEnabled = true
+            audioRecorder?.record()
+            print("✅ AudioRecorderManager [Fallback]: AVAudioRecorder başladı — \(fileName)")
+        } catch {
+            print("⚠️ AudioRecorderManager [Fallback]: AVAudioRecorder başlatılamadı: \(error)")
+            FileManager.default.createFile(atPath: fileURL.path, contents: Data(), attributes: nil)
+        }
+        
+        isRecording = true
+        isPaused = false
+        recordingTime = 0
+        liveAudioLevels.removeAll()
+        startTimer()
     }
     
     // MARK: - Pause / Resume / Stop
     
     public func pauseRecording() {
-        if isSimulatorMode {
+        if isUsingFallbackRecorder {
             audioRecorder?.pause()
         } else {
             audioEngine.pause()
@@ -184,7 +165,7 @@ public final class AudioRecorderManager: NSObject, AVAudioRecorderDelegate {
     }
     
     public func resumeRecording() {
-        if isSimulatorMode {
+        if isUsingFallbackRecorder {
             audioRecorder?.record()
         } else {
             do { try audioEngine.start() } catch {
@@ -199,7 +180,7 @@ public final class AudioRecorderManager: NSObject, AVAudioRecorderDelegate {
         timer?.invalidate()
         timer = nil
         
-        if isSimulatorMode {
+        if isUsingFallbackRecorder {
             audioRecorder?.stop()
             audioRecorder = nil
         } else {
@@ -207,7 +188,7 @@ public final class AudioRecorderManager: NSObject, AVAudioRecorderDelegate {
                 audioEngine.inputNode.removeTap(onBus: 0)
                 audioEngine.stop()
             }
-            audioFile = nil  // Dosyayı kapat (flush)
+            audioFile = nil  // Dosyayı kapat (flush to disk)
         }
         
         onAudioBuffer = nil
@@ -220,7 +201,7 @@ public final class AudioRecorderManager: NSObject, AVAudioRecorderDelegate {
             ? [0.3, 0.5, 0.7, 0.4, 0.6, 0.8, 0.5, 0.3]
             : liveAudioLevels
         
-        print("✅ AudioRecorderManager: Kayıt durduruldu — \(fileName), süre: \(String(format: "%.1f", duration))s")
+        print("✅ AudioRecorderManager: Kayıt tamamlandı — \(fileName), süre: \(String(format: "%.1f", duration))s")
         return (fileName, duration, levels)
     }
     
@@ -233,8 +214,7 @@ public final class AudioRecorderManager: NSObject, AVAudioRecorderDelegate {
                 guard let self = self, self.isRecording, !self.isPaused else { return }
                 self.recordingTime += 0.1
                 
-                // Simülatörde seviye simulasyonu
-                if self.isSimulatorMode {
+                if self.isUsingFallbackRecorder {
                     if let rec = self.audioRecorder, rec.isRecording {
                         rec.updateMeters()
                         let raw = rec.averagePower(forChannel: 0)
