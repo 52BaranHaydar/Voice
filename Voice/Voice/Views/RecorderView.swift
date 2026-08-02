@@ -314,24 +314,10 @@ public struct RecorderView: View {
     private func toggleRecording() {
         if !recorderManager.isRecording {
             Task {
-                // Yetkilendirme al
                 _ = await recorderManager.requestPermissions()
                 _ = await speechManager.requestAuthorization()
-                
-                // Canlı transkripsiyon için buffer request başlat
-                if let _ = speechManager.startLiveTranscribingWithBuffers() {
-                    recorderManager.onAudioBuffer = { [weak speechManager] buffer in
-                        speechManager?.appendBuffer(buffer)
-                    }
-                } else {
-                    recorderManager.onAudioBuffer = nil
-                }
-                
                 recorderManager.startRecording()
                 isPulseAnimating = true
-                
-                // Periyodik dosya okuma görevi (canlı metin kutusunu 1.5 saniyede bir günceller)
-                startLivePollingTask()
             }
         } else if recorderManager.isPaused {
             recorderManager.resumeRecording()
@@ -340,47 +326,18 @@ public struct RecorderView: View {
         }
     }
     
-    private func startLivePollingTask() {
-        Task {
-            // İlk okuma için 1 saniye bekle
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            
-            while recorderManager.isRecording {
-                if !recorderManager.isPaused, let fileName = recorderManager.currentRecordingFileName {
-                    let fileURL = recorderManager.getAudioFileURL(fileName: fileName)
-                    let text = await speechManager.transcribeAudioFile(url: fileURL)
-                    if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        await MainActor.run {
-                            self.speechManager.liveTranscript = text
-                            print("📺 Periyodik Canlı Metin Güncellendi: \"\(text)\"")
-                        }
-                    }
-                }
-                try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5s aralıklarla
-            }
-        }
-    }
-
-    
     private func cancelRecording() {
         _ = recorderManager.stopRecording()
-        speechManager.stopTranscribing()
         isPulseAnimating = false
     }
     
     private func finishRecordingAndPromptSave() {
         isPulseAnimating = false
-        
-        // Canlı transkripsiyon metnini sakla (kayıt durmadan önce al)
-        let capturedLiveTranscript = speechManager.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // Canlı transkripsiyon ve kaydetıcıyı durdur
-        speechManager.stopLiveTranscribing()
-        
         noteTitle = "Ses Notu \(voiceNotes.count + 1)"
+        customTranscript = ""
         isTranscribing = false
         
-        // Kayıtı tamamen durdur (dosyayı kapat)
+        // Kaydı durdur ve dosyayı tamamen kapat
         guard let (fileName, duration, levels) = recorderManager.stopRecording() else {
             return
         }
@@ -389,29 +346,27 @@ public struct RecorderView: View {
         savedDuration = duration
         savedLevels = levels
         
-        // Canlı metni doğrudan kullan — dosya transkripsiyon gerektirmez!
-        if !capturedLiveTranscript.isEmpty {
-            customTranscript = capturedLiveTranscript
-            print("✅ Canlı transkript kullanılıyor: \(capturedLiveTranscript)")
-            showSaveSheet = true
-            return
-        }
-        
-        // Canlı metin yoksa dosyadan al (fallback)
-        customTranscript = ""
         showSaveSheet = true
         isTranscribing = true
         
         Task {
             let fileURL = recorderManager.getAudioFileURL(fileName: fileName)
-            try? await Task.sleep(nanoseconds: 800_000_000) // 0.8s — dosya kapanması için
             
+            // Dosyanın diskte finalize olması için kısa bekleme
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            
+            print("🎙️ Kaydedilen ses dosyası analiz ediliyor: \(fileName)")
             let appleResult = await speechManager.transcribeAudioFile(url: fileURL)
-            if !appleResult.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                self.customTranscript = appleResult
-                print("✅ Dosya transkripti: \(appleResult)")
+            
+            await MainActor.run {
+                if !appleResult.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self.customTranscript = appleResult
+                    print("✅ Transkript Metin Kutununa Yazıldı: \"\(appleResult)\"")
+                } else {
+                    print("⚠️ Transkript boş döndü.")
+                }
+                self.isTranscribing = false
             }
-            self.isTranscribing = false
         }
     }
     

@@ -2,10 +2,6 @@ import Foundation
 import Speech
 import AVFoundation
 
-/// SpeechRecognizerManager
-/// MainActor - UI state yönetimi için
-/// Önemli: liveRequest nonisolated(unsafe) olarak saklanır,
-/// böylece AVAudioEngine tap'inin gerçek zamanlı audio thread'inden kilitlenme olmadan erişilir.
 @MainActor
 @Observable
 public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate {
@@ -18,10 +14,6 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
     
     // MARK: - Private State
     private var speechRecognizer: SFSpeechRecognizer?
-    private var recognitionTask: SFSpeechRecognitionTask?
-    
-    // thread-safe audio request handle
-    nonisolated(unsafe) private var liveRequest: SFSpeechAudioBufferRecognitionRequest?
     
     // MARK: - Init
     public override init() {
@@ -51,77 +43,12 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         }
     }
     
-    // MARK: - Live Transcription (Buffer-Based)
-    public func startLiveTranscribingWithBuffers() -> SFSpeechAudioBufferRecognitionRequest? {
-        let status = SFSpeechRecognizer.authorizationStatus()
-        guard status == .authorized else {
-            print("⚠️ SpeechManager: Konuşma tanıma izni yetersiz (Status: \(status.rawValue))")
-            return nil
-        }
-        
-        setupRecognizer(locale: selectedLanguageCode)
-        
-        guard let recognizer = speechRecognizer else {
-            print("⚠️ SpeechManager: SFSpeechRecognizer oluşturulamadı.")
-            return nil
-        }
-        
-        stopLiveTranscribing()
-        
-        liveTranscript = ""
-        isTranscribing = true
-        
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.requiresOnDeviceRecognition = false
-        request.addsPunctuation = true
-        self.liveRequest = request
-        
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                
-                if let result = result {
-                    let text = result.bestTranscription.formattedString
-                    if !text.isEmpty {
-                        self.liveTranscript = text
-                        print("🎙️ CANLI YAZI GELDİ [\(recognizer.locale.identifier)]: \"\(text)\"")
-                    }
-                }
-                
-                if let error = error {
-                    let code = (error as NSError).code
-                    print("ℹ️ SpeechManager canlı task bildirimi [\(code)]: \(error.localizedDescription)")
-                }
-            }
-        }
-        
-        print("✅ SpeechManager: Canlı transkripsiyon başlatıldı (\(recognizer.locale.identifier))")
-        return request
-    }
-    
-    /// Audio tap thread'inden güvenle çağrılır (nonisolated, thread-safe)
-    public nonisolated func appendBuffer(_ buffer: AVAudioPCMBuffer) {
-        liveRequest?.append(buffer)
-    }
-    
-    public func stopLiveTranscribing() {
-        liveRequest?.endAudio()
-        liveRequest = nil
-        recognitionTask?.finish()
-        recognitionTask = nil
-        isTranscribing = false
-    }
-    
-    public func startLiveTranscribing() {}
-    public func stopTranscribing() { stopLiveTranscribing() }
-    
     public func setLanguage(_ code: String) {
         selectedLanguageCode = code
         setupRecognizer(locale: code)
     }
     
-    // MARK: - File Transcription (Periyodik veya kayıt sonu)
+    // MARK: - File Transcription (Kayıt bitince .m4a dosyasından metin çıkarma)
     public func transcribeAudioFile(url: URL) async -> String {
         let status = SFSpeechRecognizer.authorizationStatus()
         guard status == .authorized else {
@@ -149,7 +76,6 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         }
         #endif
         
-        // ÖNEMLİ: İngilizce (en-US) fallback kaldırıldı! Sadece seçilen dil (tr-TR) kullanılır.
         let targetLocale = selectedLanguageCode.isEmpty ? "tr-TR" : selectedLanguageCode
         guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: targetLocale)) else {
             print("❌ transcribeAudioFile: [\(targetLocale)] tanıyıcı oluşturulamadı.")
@@ -160,7 +86,7 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         request.shouldReportPartialResults = false
         request.requiresOnDeviceRecognition = false
         
-        print("🔄 transcribeAudioFile [\(targetLocale)]: Dosya analiz ediliyor...")
+        print("🔄 transcribeAudioFile [\(targetLocale)]: Dosya analiz ediliyor: \(url.lastPathComponent)")
         
         let text: String = await withCheckedContinuation { cont in
             var done = false
