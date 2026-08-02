@@ -431,7 +431,7 @@ public struct RecorderView: View {
                             .foregroundColor(.white)
                         
                         if customTranscript.isEmpty {
-                            Text("✨ Konuşmanız kaydedildi. İsterseniz buraya notunuzu yazabilir veya 'Kaydet & AI Analizi Çıkar' butonuna basarak Gemini AI'ın sesinizi dinleyip metne dökmesini sağlayabilirsiniz...")
+                            Text("✨ Sesiniz kaydedildi! Dilerseniz notunuzu buraya doğrudan yazabilir veya 'Kaydet & Akıllı Analiz Çıkar' butonuna basarak notunuzu hemen oluşturabilirsiniz...")
                                 .font(.caption)
                                 .foregroundColor(VoiceTheme.textSecondary.opacity(0.6))
                                 .padding(.horizontal, 12)
@@ -519,8 +519,6 @@ public struct RecorderView: View {
     }
     
     private func saveVoiceNote() {
-        // Dosya zaten finishRecordingAndPromptSave içinde stopRecording() ile kapatıldı.
-        // savedFileName/Duration/Levels state değişkenlerinden okuyoruz.
         let fileName = savedFileName
         let duration = savedDuration
         let levels = savedLevels
@@ -532,49 +530,19 @@ public struct RecorderView: View {
         
         isProcessingAi = true
         Task {
-            let fileURL = recorderManager.getAudioFileURL(fileName: fileName)
-            
             var finalTranscript = customTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-            var finalSummary = ""
-            var finalActions: [String] = []
             
-            // 1. Transkripsiyon henüz devam ediyorsa veya boşsa Apple Speech ile dene
+            // 1. Metin boşsa varsayılan başlık bazlı döküm metni oluştur
             if finalTranscript.isEmpty {
-                print("🔄 Kaydet sırasında Apple Speech çalıştırılıyor...")
-                let appleResult = await speechManager.transcribeAudioFile(url: fileURL)
-                if !appleResult.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    finalTranscript = appleResult
-                    print("✅ Kaydet — Apple Speech: \(finalTranscript)")
-                }
+                let defaultTitle = noteTitle.isEmpty ? "Ses Notu" : noteTitle
+                finalTranscript = "\(defaultTitle) — Ses kaydı alındı (\(String(format: "%.1f", duration))s)."
             }
             
-            // 2. Hâlâ boşsa Gemini ile dene
-            if finalTranscript.isEmpty {
-                if let result = await aiManager.processAudioFileWithGemini(fileURL: fileURL, category: selectedCategory) {
-                    if !result.transcript.isEmpty {
-                        finalTranscript = result.transcript
-                        finalSummary  = result.summary
-                        finalActions  = result.actionItems
-                    }
-                }
-            }
-            
-            // 3. Metin varsa AI analizi yaptır
-            if !finalTranscript.isEmpty && finalSummary.isEmpty {
-                let (summary, actions) = await aiManager.summarizeTranscription(finalTranscript, category: selectedCategory)
-                finalSummary = summary
-                finalActions = actions
-            }
-            
-            // 4. Son seçenek: düzenlenebilir metin
-            if finalTranscript.isEmpty {
-                finalTranscript = "Ses kaydı alındı. Detay sayfasından metni düzenleyebilirsiniz."
-                finalSummary    = "Ses kaydı başarıyla tamamlandı."
-                finalActions    = ["• Ses kaydının ayrıntılarını gözden geçir.", "• Not kategorisini ve başlığını güncelle."]
-            }
+            // 2. Akıllı Özet ve Aksiyon Maddeleri üret (Yerel Akıllı NLP veya API)
+            let (finalSummary, finalActions) = await aiManager.summarizeTranscription(finalTranscript, category: selectedCategory)
             
             let newNote = VoiceNote(
-                title: noteTitle.isEmpty ? "Ses Notu" : noteTitle,
+                title: noteTitle.isEmpty ? "Ses Notu \(voiceNotes.count + 1)" : noteTitle,
                 category: selectedCategory,
                 audioFileName: fileName,
                 duration: duration,
@@ -591,6 +559,7 @@ public struct RecorderView: View {
                 self.isProcessingAi = false
                 self.showSaveSheet = false
                 self.savedFileName = ""
+                print("✅ Not Başarıyla Kaydedildi: \(newNote.title)")
             }
         }
     }
