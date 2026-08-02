@@ -293,7 +293,7 @@ public struct VoiceNoteDetailView: View {
                                     Text(isCopied ? "Kopyalandı" : "Kopyala")
                                         .font(.caption.bold())
                                 }
-                               .foregroundColor(isCopied ? Color.green : VoiceTheme.accentCyan)
+                                .foregroundColor(isCopied ? Color.green : VoiceTheme.accentCyan)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 4)
                                 .background((isCopied ? Color.green : VoiceTheme.accentCyan).opacity(0.15))

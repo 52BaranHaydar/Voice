@@ -163,7 +163,9 @@ public struct VoiceNotesListView: View {
                 }
             }
             .navigationTitle("Notlarım")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .sheet(isPresented: $showAddTypedNoteSheet) {
                 AddTypedNoteSheet(voiceNotes: $voiceNotes)
             }

@@ -5,9 +5,9 @@ public struct VoiceTheme {
     public static let bgCard = Color(red: 0.10, green: 0.11, blue: 0.16)
     public static let bgCardBorder = Color(red: 0.20, green: 0.22, blue: 0.32)
     
-    public static let primaryGlow = Color(red: 0.52, green: 0.35, blue: 0.98) // Neon Purple
-    public static let accentCyan = Color(red: 0.22, green: 0.85, blue: 0.96) // Neon Cyan
-    public static let accentPink = Color(red: 0.98, green: 0.35, blue: 0.65) // Neon Pink
+    public static let primaryGlow = Color(red: 0.52, green: 0.35, blue: 0.98)
+    public static let accentCyan = Color(red: 0.22, green: 0.85, blue: 0.96)
+    public static let accentPink = Color(red: 0.98, green: 0.35, blue: 0.65)
     
     public static let textPrimary = Color.white
     public static let textSecondary = Color(red: 0.68, green: 0.70, blue: 0.78)

@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 
+@MainActor
 @Observable
 public final class AudioPlayerManager: NSObject, AVAudioPlayerDelegate {
     public var isPlaying: Bool = false
@@ -86,8 +87,8 @@ public final class AudioPlayerManager: NSObject, AVAudioPlayerDelegate {
         }
     }
     
-    public func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        DispatchQueue.main.async {
+    public nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in
             self.isPlaying = false
             self.currentTime = 0
             self.timer?.invalidate()
@@ -98,8 +99,10 @@ public final class AudioPlayerManager: NSObject, AVAudioPlayerDelegate {
     private func startTimer() {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            guard let self = self, let player = self.audioPlayer, self.isPlaying else { return }
-            self.currentTime = player.currentTime
+            Task { @MainActor in
+                guard let self = self, let player = self.audioPlayer, self.isPlaying else { return }
+                self.currentTime = player.currentTime
+            }
         }
     }
     

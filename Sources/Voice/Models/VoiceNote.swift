@@ -22,7 +22,7 @@ public enum NoteCategory: String, Codable, CaseIterable, Identifiable, Sendable 
     }
 }
 
-public struct VoiceNote: Identifiable, Codable, Equatable {
+public struct VoiceNote: Identifiable, Codable, Equatable, Sendable {
     public let id: UUID
     public var title: String
     public var category: NoteCategory
@@ -33,7 +33,7 @@ public struct VoiceNote: Identifiable, Codable, Equatable {
     public var aiSummary: String
     public var actionItems: [String]
     public var isFavorite: Bool
-    public var audioLevels: [Float] // Decibel levels normalized [0..1] for visual waveform
+    public var audioLevels: [Float]
     
     public init(
         id: UUID = UUID(),

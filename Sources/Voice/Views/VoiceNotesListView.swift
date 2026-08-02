@@ -7,7 +7,9 @@ public struct VoiceNotesListView: View {
     @State private var showOnlyFavorites: Bool = false
     
     @State private var playerManager = AudioPlayerManager()
+    @State private var ttsManager = TextToSpeechManager()
     @State private var selectedNoteForDetail: VoiceNote? = nil
+    @State private var showAddTypedNoteSheet: Bool = false
     
     public init(voiceNotes: Binding<[VoiceNote]>) {
         self._voiceNotes = voiceNotes
@@ -28,11 +30,40 @@ public struct VoiceNotesListView: View {
                 VoiceTheme.backgroundGradient.ignoresSafeArea()
                 
                 VStack(spacing: 16) {
+                    // Header Action Row
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Not Kütüphanesi")
+                                .font(.title2.bold())
+                                .foregroundColor(VoiceTheme.textPrimary)
+                            Text("Sesli ve yazılı notlarınız")
+                                .font(.caption)
+                                .foregroundColor(VoiceTheme.textSecondary)
+                        }
+                        Spacer()
+                        
+                        Button(action: { showAddTypedNoteSheet = true }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "square.and.pencil")
+                                Text("+ Yazılı Not")
+                            }
+                            .font(.caption.bold())
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(VoiceTheme.primaryGlow)
+                            .foregroundColor(.white)
+                            .cornerRadius(16)
+                            .shadow(color: VoiceTheme.primaryGlow.opacity(0.4), radius: 6, x: 0, y: 2)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 6)
+                    
                     // Search Bar
                     HStack {
                         Image(systemName: "magnifyingglass")
                             .foregroundColor(VoiceTheme.textSecondary)
-                        TextField("Ses notlarında ara...", text: $searchText)
+                        TextField("Sesli veya yazılı notlarda ara...", text: $searchText)
                             .foregroundColor(.white)
                         if !searchText.isEmpty {
                             Button(action: { searchText = "" }) {
@@ -79,9 +110,9 @@ public struct VoiceNotesListView: View {
                         .padding(.horizontal)
                     }
                     
-                    // Favorite Toggle & Stats Row
+                    // Stats & Favorites Toggle
                     HStack {
-                        Text("\(filteredNotes.count) Ses Notu")
+                        Text("\(filteredNotes.count) Not")
                             .font(.caption)
                             .foregroundColor(VoiceTheme.textSecondary)
                         Spacer()
@@ -101,12 +132,21 @@ public struct VoiceNotesListView: View {
                     if filteredNotes.isEmpty {
                         VStack(spacing: 12) {
                             Spacer()
-                            Image(systemName: "mic.slash")
+                            Image(systemName: "note.text")
                                 .font(.system(size: 48))
                                 .foregroundColor(VoiceTheme.textSecondary)
-                            Text("Henüz ses notu bulunmuyor")
+                            Text("Henüz not bulunmuyor")
                                 .font(.headline)
                                 .foregroundColor(VoiceTheme.textSecondary)
+                            Button(action: { showAddTypedNoteSheet = true }) {
+                                Text("İlk Yazılı Notunu Ekle")
+                                    .font(.subheadline.bold())
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 10)
+                                    .background(VoiceTheme.accentCyan)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                            }
                             Spacer()
                         }
                     } else {
@@ -123,9 +163,14 @@ public struct VoiceNotesListView: View {
                 }
             }
             .navigationTitle("Notlarım")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .sheet(isPresented: $showAddTypedNoteSheet) {
+                AddTypedNoteSheet(voiceNotes: $voiceNotes)
+            }
             .sheet(item: $selectedNoteForDetail) { note in
-                VoiceNoteDetailView(note: binding(for: note), playerManager: playerManager)
+                VoiceNoteDetailView(note: binding(for: note), playerManager: playerManager, ttsManager: ttsManager)
             }
         }
     }
@@ -133,7 +178,6 @@ public struct VoiceNotesListView: View {
     private func noteCard(for note: VoiceNote) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                // Category Tag
                 HStack(spacing: 4) {
                     Image(systemName: note.category.iconName)
                     Text(note.category.rawValue)
@@ -144,6 +188,16 @@ public struct VoiceNotesListView: View {
                 .background(VoiceTheme.primaryGlow.opacity(0.3))
                 .foregroundColor(VoiceTheme.accentCyan)
                 .cornerRadius(8)
+                
+                if note.audioFileName.isEmpty {
+                    Text("YAZILI NOT")
+                        .font(.caption2.bold())
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(VoiceTheme.accentPink.opacity(0.3))
+                        .foregroundColor(VoiceTheme.accentPink)
+                        .cornerRadius(6)
+                }
                 
                 Spacer()
                 
@@ -168,18 +222,38 @@ public struct VoiceNotesListView: View {
                     .lineLimit(2)
             }
             
-            // Audio Playback Bar
             HStack(spacing: 12) {
-                Button(action: {
-                    if playerManager.currentlyPlayingFileName == note.audioFileName && playerManager.isPlaying {
-                        playerManager.pauseAudio()
-                    } else {
-                        playerManager.playAudio(fileName: note.audioFileName)
+                if !note.audioFileName.isEmpty {
+                    Button(action: {
+                        if playerManager.currentlyPlayingFileName == note.audioFileName && playerManager.isPlaying {
+                            playerManager.pauseAudio()
+                        } else {
+                            playerManager.playAudio(fileName: note.audioFileName)
+                        }
+                    }) {
+                        Image(systemName: (playerManager.currentlyPlayingFileName == note.audioFileName && playerManager.isPlaying) ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.title)
+                            .foregroundColor(VoiceTheme.accentCyan)
                     }
-                }) {
-                    Image(systemName: (playerManager.currentlyPlayingFileName == note.audioFileName && playerManager.isPlaying) ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.title)
-                        .foregroundColor(VoiceTheme.accentCyan)
+                } else {
+                    Button(action: {
+                        if ttsManager.isSpeaking {
+                            ttsManager.stopSpeaking()
+                        } else {
+                            ttsManager.speak(text: note.transcript)
+                        }
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: ttsManager.isSpeaking ? "speaker.wave.3.fill" : "speaker.wave.2.fill")
+                            Text(ttsManager.isSpeaking ? "Durdur" : "Sesli Oku")
+                                .font(.caption.bold())
+                        }
+                        .foregroundColor(VoiceTheme.accentPink)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(VoiceTheme.accentPink.opacity(0.2))
+                        .cornerRadius(12)
+                    }
                 }
                 
                 AudioWaveformView(levels: note.audioLevels, isRecording: false)

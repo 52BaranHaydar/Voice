@@ -129,7 +129,11 @@ public final class VoiceAiManager {
                             return parseGeminiAudioReply(reply)
                         }
                     } else if statusCode == 404 {
-                        continue // Sonraki modeli dene
+                        continue // Bu model yok, sonraki modeli dene
+                    } else if statusCode == 429 {
+                        // Kota doldu — tüm modeller aynı kotayı paylaşır, devam etme
+                        print("⚠️ Gemini kota doldu (429). Gemini API atlanıyor.")
+                        return nil
                     } else {
                         if let rawString = String(data: data, encoding: .utf8) {
                             print("Gemini Audio [\(apiVersion)/\(model)] Yanıt (\(statusCode)): \(rawString)")
@@ -141,7 +145,7 @@ public final class VoiceAiManager {
             }
         }
         
-        print("VoiceAiManager: Tüm Gemini multimodal ses modelleri erişilemez. Apple Speech fallback kullanılacak.")
+        print("VoiceAiManager: Tüm Gemini multimodal ses modelleri erişilemez.")
         return nil
     }
     
