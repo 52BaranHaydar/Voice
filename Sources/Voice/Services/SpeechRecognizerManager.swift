@@ -30,20 +30,16 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
     }
     
     private func setupRecognizer(locale: String) {
-        let localesToTry = [locale, "tr-TR", "en-US", Locale.current.identifier]
-        for loc in localesToTry {
-            if let recognizer = SFSpeechRecognizer(locale: Locale(identifier: loc)), recognizer.isAvailable {
-                speechRecognizer = recognizer
-                speechRecognizer?.delegate = self
-                speechRecognizer?.defaultTaskHint = .dictation
-                print("✅ SpeechManager: SFSpeechRecognizer hazır (\(loc))")
-                return
-            }
+        if let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)) {
+            speechRecognizer = recognizer
+        } else if let fallback = SFSpeechRecognizer(locale: Locale(identifier: "tr-TR")) {
+            speechRecognizer = fallback
+        } else {
+            speechRecognizer = SFSpeechRecognizer()
         }
-        
-        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "tr-TR")) ?? SFSpeechRecognizer()
         speechRecognizer?.delegate = self
         speechRecognizer?.defaultTaskHint = .dictation
+        print("✅ SpeechManager: SFSpeechRecognizer hazır (\(speechRecognizer?.locale.identifier ?? "unknown"))")
     }
     
     // MARK: - Authorization
@@ -138,10 +134,12 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         }
         
         guard FileManager.default.fileExists(atPath: url.path) else {
+            print("⚠️ transcribeAudioFile: Dosya bulunamadı: \(url.path)")
             return ""
         }
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
         guard size > 500 else {
+            print("⚠️ transcribeAudioFile: Dosya çok küçük (\(size) bytes)")
             return ""
         }
         
@@ -155,21 +153,32 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         }
         #endif
         
-        for locale in [selectedLanguageCode, "tr-TR", "en-US"] {
-            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)),
-                  recognizer.isAvailable else { continue }
+        for locale in [selectedLanguageCode, "tr-TR", "en-US", Locale.current.identifier] {
+            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)) else { continue }
             
             let request = SFSpeechURLRecognitionRequest(url: url)
             request.shouldReportPartialResults = false
             request.requiresOnDeviceRecognition = false
+            
+            print("🔄 transcribeAudioFile [\(locale)]: Başlatılıyor...")
             
             let text: String = await withCheckedContinuation { cont in
                 var done = false
                 var best = ""
                 recognizer.recognitionTask(with: request) { result, error in
                     guard !done else { return }
-                    if let r = result { best = r.bestTranscription.formattedString; if r.isFinal { done = true; cont.resume(returning: best) } }
-                    if let e = error { done = true; cont.resume(returning: best) }
+                    if let r = result {
+                        best = r.bestTranscription.formattedString
+                        if r.isFinal {
+                            done = true
+                            cont.resume(returning: best)
+                        }
+                    }
+                    if let e = error {
+                        done = true
+                        print("⚠️ transcribeAudioFile [\(locale)] hatası: \(e.localizedDescription)")
+                        cont.resume(returning: best)
+                    }
                 }
             }
             
@@ -178,6 +187,8 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
                 return text
             }
         }
+        
+        print("❌ transcribeAudioFile: Tüm dillerde sonuç boş döndü.")
         return ""
     }
     
