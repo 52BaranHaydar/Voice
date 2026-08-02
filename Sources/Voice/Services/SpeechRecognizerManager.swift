@@ -14,13 +14,17 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
     
     // MARK: - Private State
     private var speechRecognizer: SFSpeechRecognizer?
-    
+    private var recognitionTask: SFSpeechRecognitionTask?
+
+    // Audio tap'in gerçek zamanlı ses thread'inden kilitlenmeden erişebilmesi için thread-safe handle
+    nonisolated(unsafe) private var liveRequest: SFSpeechAudioBufferRecognitionRequest?
+
     // MARK: - Init
     public override init() {
         super.init()
         setupRecognizer(locale: selectedLanguageCode)
     }
-    
+
     private func setupRecognizer(locale: String) {
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: locale))
             ?? SFSpeechRecognizer(locale: Locale(identifier: "tr-TR"))
@@ -29,7 +33,7 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         speechRecognizer?.defaultTaskHint = .dictation
         print("✅ SpeechManager: SFSpeechRecognizer hazır (\(speechRecognizer?.locale.identifier ?? locale))")
     }
-    
+
     // MARK: - Authorization
     public func requestAuthorization() async -> Bool {
         await withCheckedContinuation { continuation in
@@ -42,13 +46,75 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
             }
         }
     }
-    
+
     public func setLanguage(_ code: String) {
         selectedLanguageCode = code
         setupRecognizer(locale: code)
     }
+
+    // MARK: - Live Transcription (Kayıt sırasında AVAudioEngine buffer'larından anlık metin)
+    /// Kayıt başlarken çağrılır. Konuşma bitmeden `liveTranscript` anlık olarak güncellenir.
+    public func startLiveTranscribingWithBuffers() {
+        let status = SFSpeechRecognizer.authorizationStatus()
+        guard status == .authorized else {
+            print("⚠️ SpeechManager: Canlı tanıma için izin yetersiz (Status: \(status.rawValue))")
+            return
+        }
+
+        setupRecognizer(locale: selectedLanguageCode)
+
+        guard let recognizer = speechRecognizer else {
+            print("⚠️ SpeechManager: SFSpeechRecognizer oluşturulamadı.")
+            return
+        }
+
+        stopLiveTranscribing()
+
+        liveTranscript = ""
+        isTranscribing = true
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = false
+        request.addsPunctuation = true
+        self.liveRequest = request
+
+        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+
+                if let result = result {
+                    let text = result.bestTranscription.formattedString
+                    if !text.isEmpty {
+                        self.liveTranscript = text
+                        print("🎙️ CANLI YAZI GELDİ [\(recognizer.locale.identifier)]: \"\(text)\"")
+                    }
+                }
+
+                if let error = error {
+                    let code = (error as NSError).code
+                    print("ℹ️ SpeechManager canlı task bildirimi [\(code)]: \(error.localizedDescription)")
+                }
+            }
+        }
+
+        print("✅ SpeechManager: Canlı transkripsiyon başlatıldı (\(recognizer.locale.identifier))")
+    }
+
+    /// Audio tap thread'inden güvenle çağrılır (nonisolated, thread-safe).
+    public nonisolated func appendLiveBuffer(_ buffer: AVAudioPCMBuffer) {
+        liveRequest?.append(buffer)
+    }
+
+    public func stopLiveTranscribing() {
+        liveRequest?.endAudio()
+        liveRequest = nil
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        isTranscribing = false
+    }
     
-    // MARK: - File Transcription (Kayıt bitince .m4a dosyasından metin çıkarma)
+    // MARK: - File Transcription (Kayıt bitince ses dosyasından metin çıkarma)
     public func transcribeAudioFile(url: URL) async -> String {
         let status = SFSpeechRecognizer.authorizationStatus()
         guard status == .authorized else {
