@@ -300,9 +300,12 @@ public struct RecorderView: View {
     
     private func toggleRecording() {
         if !recorderManager.isRecording {
-            recorderManager.startRecording()
-            speechManager.startLiveTranscribing()
-            isPulseAnimating = true
+            Task {
+                _ = await speechManager.requestAuthorization()
+                recorderManager.startRecording()
+                speechManager.startLiveTranscribing()
+                isPulseAnimating = true
+            }
         } else if recorderManager.isPaused {
             recorderManager.resumeRecording()
         } else {
@@ -424,10 +427,26 @@ public struct RecorderView: View {
             return
         }
         
-        let finalTranscript = speechManager.liveTranscript.isEmpty ? "Ses kaydı dökümü alındı." : speechManager.liveTranscript
-        
         isProcessingAi = true
         Task {
+            var finalTranscript = speechManager.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            if finalTranscript.hasPrefix("🎤 [Canlı Dikte Başlatıldı]: ") {
+                finalTranscript = String(finalTranscript.dropFirst("🎤 [Canlı Dikte Başlatıldı]: ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            
+            if finalTranscript.isEmpty || finalTranscript == "Ses kaydı dökümü alındı." {
+                let fileURL = recorderManager.getAudioFileURL(fileName: fileName)
+                let fileTranscript = await speechManager.transcribeAudioFile(url: fileURL)
+                if !fileTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    finalTranscript = fileTranscript
+                }
+            }
+            
+            if finalTranscript.isEmpty {
+                finalTranscript = "Ses kaydı alındı. İçeriği yukarıdan düzenleyebilirsiniz."
+            }
+            
             let (summary, actions) = await aiManager.summarizeTranscription(finalTranscript, category: selectedCategory)
             
             let newNote = VoiceNote(

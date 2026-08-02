@@ -152,4 +152,29 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         selectedLanguageCode = code
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: code))
     }
+    
+    public func transcribeAudioFile(url: URL) async -> String {
+        let recognizer = SFSpeechRecognizer(locale: Locale(identifier: selectedLanguageCode)) ?? SFSpeechRecognizer()
+        guard let recognizer = recognizer, recognizer.isAvailable else {
+            return ""
+        }
+        
+        let request = SFSpeechURLRecognitionRequest(url: url)
+        request.shouldReportPartialResults = false
+        
+        return await withCheckedContinuation { continuation in
+            var hasResumed = false
+            recognizer.recognitionTask(with: request) { result, error in
+                guard !hasResumed else { return }
+                if let result = result, result.isFinal {
+                    hasResumed = true
+                    continuation.resume(returning: result.bestTranscription.formattedString)
+                } else if error != nil {
+                    hasResumed = true
+                    let fallbackStr = result?.bestTranscription.formattedString ?? ""
+                    continuation.resume(returning: fallbackStr)
+                }
+            }
+        }
+    }
 }

@@ -111,6 +111,10 @@ public final class AudioRecorderManager: NSObject, AVAudioRecorderDelegate {
         }
     }
     
+    public func getAudioFileURL(fileName: String) -> URL {
+        getDocumentsDirectory().appendingPathComponent(fileName)
+    }
+    
     private func getDocumentsDirectory() -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
