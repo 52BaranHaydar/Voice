@@ -240,12 +240,18 @@ public struct RecorderView: View {
                     }
                     
                     ScrollView {
-                        Text(speechManager.liveTranscript.isEmpty ? "🎙️ Sesiniz kaydediliyor... Kaydı tamamladığınızda yapay zeka ses kaydınızı dinleyip metne dökümünü çıkaracaktır." : speechManager.liveTranscript)
-                            .font(.subheadline)
-                            .lineSpacing(4)
-                            .foregroundColor(speechManager.liveTranscript.isEmpty ? VoiceTheme.textSecondary : VoiceTheme.textPrimary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .multilineTextAlignment(.leading)
+                        Text(
+                            recorderManager.isRecording && speechManager.liveTranscript.isEmpty
+                                ? "🎙️ Konuşmaya başlayın — söyledikleriniz buraya gerçek zamanlı olarak yazılacak..."
+                                : speechManager.liveTranscript.isEmpty
+                                    ? "Kaydı başlatmak için mikrofona dokunun."
+                                    : speechManager.liveTranscript
+                        )
+                        .font(.subheadline)
+                        .lineSpacing(4)
+                        .foregroundColor(speechManager.liveTranscript.isEmpty ? VoiceTheme.textSecondary : VoiceTheme.textPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(.leading)
                     }
                     .frame(height: 85)
                 }
@@ -308,9 +314,22 @@ public struct RecorderView: View {
     private func toggleRecording() {
         if !recorderManager.isRecording {
             Task {
+                // Yetkilendirme al
+                _ = await recorderManager.requestPermissions()
                 _ = await speechManager.requestAuthorization()
+                
+                // Canlı transkripsiyon için buffer request başlat
+                if let recognitionRequest = speechManager.startLiveTranscribingWithBuffers() {
+                    // AudioRecorderManager'ın her buffer'ını Speech'e ilet
+                    recorderManager.onAudioBuffer = { [weak speechManager] buffer in
+                        speechManager?.appendBuffer(buffer)
+                    }
+                } else {
+                    // Yetkilendirme yoksa buffer callback olmadan kaydet
+                    recorderManager.onAudioBuffer = nil
+                }
+                
                 recorderManager.startRecording()
-                speechManager.startLiveTranscribing()
                 isPulseAnimating = true
             }
         } else if recorderManager.isPaused {
@@ -328,13 +347,17 @@ public struct RecorderView: View {
     
     private func finishRecordingAndPromptSave() {
         isPulseAnimating = false
-        speechManager.stopTranscribing()
+        
+        // Canlı transkripsiyon metnini sakla (kayıt durmadan önce al)
+        let capturedLiveTranscript = speechManager.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Canlı transkripsiyon ve kaydetıcıyı durdur
+        speechManager.stopLiveTranscribing()
+        
         noteTitle = "Ses Notu \(voiceNotes.count + 1)"
-        customTranscript = ""
         isTranscribing = false
         
-        // ÖNEMLİ: stopRecording() çağrısı dosyayı tamamen kapatır (finalize).
-        // pauseRecording() ile açık kalan dosyayı SFSpeechURLRecognitionRequest okuyamaz.
+        // Kayıtı tamamen durdur (dosyayı kapat)
         guard let (fileName, duration, levels) = recorderManager.stopRecording() else {
             return
         }
@@ -343,34 +366,28 @@ public struct RecorderView: View {
         savedDuration = duration
         savedLevels = levels
         
+        // Canlı metni doğrudan kullan — dosya transkripsiyon gerektirmez!
+        if !capturedLiveTranscript.isEmpty {
+            customTranscript = capturedLiveTranscript
+            print("✅ Canlı transkript kullanılıyor: \(capturedLiveTranscript)")
+            showSaveSheet = true
+            return
+        }
+        
+        // Canlı metin yoksa dosyadan al (fallback)
+        customTranscript = ""
         showSaveSheet = true
         isTranscribing = true
         
         Task {
             let fileURL = recorderManager.getAudioFileURL(fileName: fileName)
+            try? await Task.sleep(nanoseconds: 800_000_000) // 0.8s — dosya kapanması için
             
-            // Kısa bir bekleme: dosyanın diske tam yazılması için
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 saniye
-            
-            // 1. Apple SFSpeechURLRecognitionRequest — API gerektirmez, cihazda çalışır
-            print("🎙️ Apple Speech başlatılıyor: \(fileURL.path)")
             let appleResult = await speechManager.transcribeAudioFile(url: fileURL)
             if !appleResult.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 self.customTranscript = appleResult
-                self.isTranscribing = false
-                print("✅ Apple Speech transkripti: \(appleResult)")
-                return
+                print("✅ Dosya transkripti: \(appleResult)")
             }
-            
-            // 2. Gemini Multimodal Audio API — Apple Speech başarısız olursa
-            print("⚡ Gemini Audio başlatılıyor...")
-            if let result = await aiManager.processAudioFileWithGemini(fileURL: fileURL, category: selectedCategory) {
-                if !result.transcript.isEmpty {
-                    self.customTranscript = result.transcript
-                    print("✅ Gemini transkripti: \(result.transcript)")
-                }
-            }
-            
             self.isTranscribing = false
         }
     }

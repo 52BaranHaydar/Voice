@@ -13,77 +13,89 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
     private var speechRecognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private var audioEngine = AVAudioEngine()
     
     public override init() {
         super.init()
-        self.speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: selectedLanguageCode))
-        self.speechRecognizer?.delegate = self
+        setupRecognizer()
     }
+    
+    private func setupRecognizer() {
+        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: selectedLanguageCode))
+        speechRecognizer?.delegate = self
+        speechRecognizer?.defaultTaskHint = .dictation
+    }
+    
+    // MARK: - Authorization
     
     public func requestAuthorization() async -> Bool {
         await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { status in
                 Task { @MainActor in
-                    switch status {
-                    case .authorized:
-                        self.isAvailable = true
-                        continuation.resume(returning: true)
-                    default:
-                        self.isAvailable = true
-                        continuation.resume(returning: true)
+                    self.isAvailable = (status == .authorized)
+                    continuation.resume(returning: status == .authorized)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Live Transcription (Buffer-Based)
+    // AudioRecorderManager'ın onAudioBuffer callback'ine bağlanır.
+    // Mikrofonu kendisi açmaz — kayıt motorundan buffer alır.
+    
+    public func startLiveTranscribingWithBuffers() -> SFSpeechAudioBufferRecognitionRequest? {
+        guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
+            print("⚠️ SpeechManager: Yetkilendirme yok, canlı transkripsiyon başlatılamıyor.")
+            return nil
+        }
+        
+        setupRecognizer()
+        
+        guard let recognizer = speechRecognizer, recognizer.isAvailable else {
+            print("⚠️ SpeechManager: Tanıyıcı mevcut değil.")
+            return nil
+        }
+        
+        stopLiveTranscribing()
+        
+        liveTranscript = ""
+        isTranscribing = true
+        
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = false
+        self.recognitionRequest = request
+        
+        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                
+                if let result = result {
+                    let text = result.bestTranscription.formattedString
+                    if !text.isEmpty {
+                        self.liveTranscript = text
+                    }
+                }
+                
+                if let error = error {
+                    let nsError = error as NSError
+                    // 209 = kLSRErrorDomain recognition cancelled (normal)
+                    // 301 = no speech detected (normal)
+                    if nsError.code != 209 && nsError.code != 301 {
+                        print("⚠️ SpeechManager canlı hata [\(nsError.code)]: \(error.localizedDescription)")
                     }
                 }
             }
         }
+        
+        print("✅ SpeechManager: Canlı transkripsiyon buffer modu başladı (\(selectedLanguageCode))")
+        return request
     }
     
-    public func startLiveTranscribing() {
-        // Canlı transkripsiyon devre dışı:
-        // AudioRecorderManager zaten mikrofonu kullanıyor.
-        // Transkripsiyon için kayıt bittikten sonra
-        // transcribeAudioFile(url:) çağrılmalıdır.
-        isTranscribing = false
-        liveTranscript = ""
+    public func appendBuffer(_ buffer: AVAudioPCMBuffer) {
+        recognitionRequest?.append(buffer)
     }
     
-    private func startRealAudioEngineStream(with recognizer: SFSpeechRecognizer) {
-        stopAudioEngine()
-        
-        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let recognitionRequest = recognitionRequest else { return }
-        
-        recognitionRequest.shouldReportPartialResults = true
-        let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-        
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
-        }
-        
-        audioEngine.prepare()
-        do {
-            try audioEngine.start()
-        } catch {
-            print("Audio engine başlatılamadı: \(error)")
-            return
-        }
-        
-        recognitionTask = recognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                if let result = result, !result.bestTranscription.formattedString.isEmpty {
-                    self.liveTranscript = result.bestTranscription.formattedString
-                }
-                if error != nil {
-                    print("Speech recognition task error: \(error?.localizedDescription ?? "")")
-                }
-            }
-        }
-    }
-    
-    public func stopTranscribing() {
-        stopAudioEngine()
+    public func stopLiveTranscribing() {
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         recognitionTask = nil
@@ -91,17 +103,21 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         isTranscribing = false
     }
     
-    private func stopAudioEngine() {
-        if audioEngine.isRunning {
-            audioEngine.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
-        }
+    // Eski API uyumluluğu için
+    public func startLiveTranscribing() {
+        // Artık kullanılmıyor — startLiveTranscribingWithBuffers() kullanın
+    }
+    
+    public func stopTranscribing() {
+        stopLiveTranscribing()
     }
     
     public func setLanguage(_ code: String) {
         selectedLanguageCode = code
-        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: code))
+        setupRecognizer()
     }
+    
+    // MARK: - File Transcription (Kayıt bittikten sonra)
     
     public func transcribeAudioFile(url: URL) async -> String {
         // 1. Yetkilendirme kontrolü
@@ -121,43 +137,38 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
             return ""
         }
         
-        // 2. Dosya var mı kontrol et
+        // 2. Dosya var mı?
         guard FileManager.default.fileExists(atPath: url.path) else {
             print("❌ SpeechRecognizer: Dosya bulunamadı: \(url.path)")
             return ""
         }
         
         let fileSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-        print("🎙️ SpeechRecognizer: Dosya boyutu = \(fileSize) bytes, URL = \(url.lastPathComponent)")
+        print("🎙️ SpeechRecognizer: Dosya: \(url.lastPathComponent), boyut: \(fileSize) bytes")
         
-        guard fileSize > 1000 else {
-            print("❌ SpeechRecognizer: Dosya çok küçük, ses kaydı boş olabilir.")
+        guard fileSize > 500 else {
+            print("❌ SpeechRecognizer: Dosya çok küçük.")
             return ""
         }
         
-        // 3. AVAudioSession'ı kayıt modundan çıkar — bu olmadan SFSpeech çalışmaz!
+        // 3. AVAudioSession'ı playback moduna al
         #if os(iOS)
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default, options: [])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
-            print("✅ AVAudioSession: playback moduna geçildi")
         } catch {
             print("⚠️ AVAudioSession ayarlanamadı: \(error.localizedDescription)")
         }
         #endif
         
-        // 4. Sırayla Türkçe → İngilizce dene
+        // 4. Türkçe → İngilizce sırasıyla dene
         let localesToTry = [selectedLanguageCode, "tr-TR", "en-US"]
         
         for locale in localesToTry {
-            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)) else {
-                print("⚠️ SpeechRecognizer [\(locale)]: Tanıyıcı oluşturulamadı")
-                continue
-            }
-            
-            if !recognizer.isAvailable {
-                print("⚠️ SpeechRecognizer [\(locale)]: isAvailable = false")
+            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)),
+                  recognizer.isAvailable else {
+                print("⚠️ SpeechRecognizer [\(locale)]: Mevcut değil")
                 continue
             }
             
@@ -165,7 +176,7 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
             request.shouldReportPartialResults = false
             request.requiresOnDeviceRecognition = false
             
-            print("🔄 SpeechRecognizer [\(locale)]: Transkripsiyon başlıyor...")
+            print("🔄 SpeechRecognizer [\(locale)]: Başlıyor...")
             
             let result: String = await withCheckedContinuation { continuation in
                 var hasResumed = false
@@ -199,7 +210,15 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
             }
         }
         
-        print("❌ SpeechRecognizer: Tüm dil denemeleri başarısız.")
+        print("❌ SpeechRecognizer: Tüm denemeler başarısız.")
         return ""
+    }
+    
+    // MARK: - SFSpeechRecognizerDelegate
+    
+    public nonisolated func speechRecognizer(_ speechRecognizer: SFSpeechRecognizer, availabilityDidChange available: Bool) {
+        Task { @MainActor in
+            self.isAvailable = available
+        }
     }
 }
