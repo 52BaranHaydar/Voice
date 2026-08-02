@@ -78,10 +78,14 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
                 
                 if let error = error {
                     let nsError = error as NSError
-                    // 209 = kLSRErrorDomain recognition cancelled (normal)
-                    // 301 = no speech detected (normal)
-                    if nsError.code != 209 && nsError.code != 301 {
+                    // 209 = tanıma iptal edildi (normal)
+                    // 300 = recognizer başlatılamadı (simülatörde normal)
+                    // 301 = ses algılanamadı (normal)
+                    let suppressedCodes = [209, 300, 301, 1110]
+                    if !suppressedCodes.contains(nsError.code) {
                         print("⚠️ SpeechManager canlı hata [\(nsError.code)]: \(error.localizedDescription)")
+                    } else if nsError.code == 300 {
+                        print("ℹ️ SpeechManager: Buffer modu simülatörde desteklenmiyor (beklenen davranış).")
                     }
                 }
             }
