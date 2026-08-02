@@ -286,18 +286,40 @@ public struct VoiceNoteDetailView: View {
                             
                             Spacer()
                             
-                            Button(action: copyToClipboard) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
-                                        .font(.caption)
-                                    Text(isCopied ? "Kopyalandı" : "Kopyala")
-                                        .font(.caption.bold())
+                            HStack(spacing: 8) {
+                                Button(action: {
+                                    if ttsManager.isSpeaking {
+                                        ttsManager.stopSpeaking()
+                                    } else {
+                                        ttsManager.speak(text: note.transcript)
+                                    }
+                                }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: ttsManager.isSpeaking ? "speaker.wave.3.fill" : "speaker.wave.2")
+                                            .font(.caption)
+                                        Text(ttsManager.isSpeaking ? "Durdur" : "Sesli Okut")
+                                            .font(.caption.bold())
+                                    }
+                                    .foregroundColor(ttsManager.isSpeaking ? VoiceTheme.accentPink : VoiceTheme.primaryGlow)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background((ttsManager.isSpeaking ? VoiceTheme.accentPink : VoiceTheme.primaryGlow).opacity(0.15))
+                                    .cornerRadius(8)
                                 }
-                                .foregroundColor(isCopied ? Color.green : VoiceTheme.accentCyan)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background((isCopied ? Color.green : VoiceTheme.accentCyan).opacity(0.15))
-                                .cornerRadius(8)
+                                
+                                Button(action: copyToClipboard) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                                            .font(.caption)
+                                        Text(isCopied ? "Kopyalandı" : "Kopyala")
+                                            .font(.caption.bold())
+                                    }
+                                    .foregroundColor(isCopied ? Color.green : VoiceTheme.accentCyan)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background((isCopied ? Color.green : VoiceTheme.accentCyan).opacity(0.15))
+                                    .cornerRadius(8)
+                                }
                             }
                         }
                         
