@@ -316,6 +316,10 @@ public struct RecorderView: View {
             Task {
                 _ = await recorderManager.requestPermissions()
                 _ = await speechManager.requestAuthorization()
+                recorderManager.setLiveBufferHandler { buffer in
+                    speechManager.appendLiveBuffer(buffer)
+                }
+                speechManager.startLiveTranscribingWithBuffers()
                 recorderManager.startRecording()
                 isPulseAnimating = true
             }
@@ -325,9 +329,10 @@ public struct RecorderView: View {
             recorderManager.pauseRecording()
         }
     }
-    
+
     private func cancelRecording() {
         _ = recorderManager.stopRecording()
+        speechManager.stopLiveTranscribing()
         isPulseAnimating = false
     }
     
@@ -341,25 +346,40 @@ public struct RecorderView: View {
         guard let (fileName, duration, levels) = recorderManager.stopRecording() else {
             return
         }
-        
+
+        // Canlı transkripsiyon sırasında zaten toplanmış olan metni al (motoru durdurmadan önce)
+        let liveResult = speechManager.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        speechManager.stopLiveTranscribing()
+
         savedFileName = fileName
         savedDuration = duration
         savedLevels = levels
-        
+
         showSaveSheet = true
-        isTranscribing = true
-        
+
+        // Canlı akıştan zaten metin geldiyse anında kutuya yaz, dosya yeniden analiz beklemeye gerek yok
+        if !liveResult.isEmpty {
+            customTranscript = liveResult
+            isTranscribing = false
+        } else {
+            isTranscribing = true
+        }
+
         Task {
             let fileURL = recorderManager.getAudioFileURL(fileName: fileName)
-            
-            // Dosyanın diskte finalize olması için kısa bekleme
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            
-            print("🎙️ Kaydedilen ses dosyası analiz ediliyor: \(fileName)")
-            
-            // 1. Apple Speech ile dene (Gerçek iPhone'da 100% çalışır)
-            var finalResult = await speechManager.transcribeAudioFile(url: fileURL)
-            
+
+            var finalResult = liveResult
+
+            if finalResult.isEmpty {
+                // Dosyanın diskte finalize olması için kısa bekleme
+                try? await Task.sleep(nanoseconds: 400_000_000)
+
+                print("🎙️ Kaydedilen ses dosyası analiz ediliyor: \(fileName)")
+
+                // 1. Apple Speech ile dene (Gerçek iPhone'da 100% çalışır)
+                finalResult = await speechManager.transcribeAudioFile(url: fileURL)
+            }
+
             // 2. Apple Speech sonuç vermezse (Simülatördeki Error 1101) -> Gemini AI ile dene
             if finalResult.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 print("⚡ Apple Speech sonuç vermedi (Simülatör kısıtlaması). Gemini AI deneniyor...")
