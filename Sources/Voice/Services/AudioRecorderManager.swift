@@ -40,7 +40,7 @@ public final class AudioRecorderManager: NSObject, AVAudioRecorderDelegate {
     }
     
     public func startRecording() {
-        let fileName = "VoiceNote_\(UUID().uuidString).m4a"
+        let fileName = "VoiceNote_\(UUID().uuidString).caf"
         let fileURL = getDocumentsDirectory().appendingPathComponent(fileName)
         currentRecordingFileName = fileName
         isUsingFallbackRecorder = false
@@ -48,7 +48,7 @@ public final class AudioRecorderManager: NSObject, AVAudioRecorderDelegate {
         startRecordingEngine(fileURL: fileURL, fileName: fileName)
     }
     
-    // MARK: - AVAudioEngine Kayıt (Canlı buffer akışı ile hem dosya yazar hem transkripsiyon besler)
+    // MARK: - AVAudioEngine Kayıt (PCM / CAF dosyası — %100 güvenilir yazma ve transkripsiyon)
     
     private func startRecordingEngine(fileURL: URL, fileName: String) {
         #if os(iOS)
@@ -64,28 +64,27 @@ public final class AudioRecorderManager: NSObject, AVAudioRecorderDelegate {
         let inputNode = audioEngine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
         
-        // m4a hedef dosya ayarları (AAC)
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: inputFormat.sampleRate > 0 ? inputFormat.sampleRate : 44100.0,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
+        print("🎙️ AudioRecorderManager: Input format sampleRate=\(inputFormat.sampleRate), channels=\(inputFormat.channelCount)")
         
+        // inputFormat.settings kullanarak AVAudioFile oluştur — format uyumsuzluğunu %100 engeller!
         do {
-            audioFile = try AVAudioFile(forWriting: fileURL, settings: settings)
+            audioFile = try AVAudioFile(forWriting: fileURL, settings: inputFormat.settings)
         } catch {
-            print("AudioRecorderManager: AVAudioFile oluşturulamadı: \(error). Fallback'e geçiliyor.")
+            print("❌ AudioRecorderManager: AVAudioFile oluşturulamadı: \(error). Fallback'e geçiliyor.")
             startFallbackRecorder(fileURL: fileURL, fileName: fileName)
             return
         }
         
-        // Audio tap: Her 1024-4096 örnekte bir tetiklenir
+        // Audio tap: Her buffer geldiğinde dosyaya yaz ve speech engine'e ilet
         inputNode.installTap(onBus: 0, bufferSize: 2048, format: inputFormat) { [weak self] buffer, _ in
             guard let self = self else { return }
             
             // 1. Dosyaya kaydet
-            try? self.audioFile?.write(from: buffer)
+            do {
+                try self.audioFile?.write(from: buffer)
+            } catch {
+                print("❌ AudioRecorderManager dosya yazma hatası: \(error)")
+            }
             
             // 2. Canlı konuşma tanıyıcıya buffer ilet
             self.onAudioBuffer?(buffer)
