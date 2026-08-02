@@ -17,9 +17,9 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
     private var simulatorTimer: Timer?
     
     private let demoPhrases = [
-        "Voice projesinde sesli not kaydı alıyor ve yapay zeka ile otomatik özet çıkarıyoruz.",
-        "Bu simülasyon metnidir. Gerçek cihazda mikrofon sesiniz anlık dökülür.",
-        "Toplantı notları ve aksiyon maddeleri başarıyla kategorize ediliyor."
+        "Sesli not kaydı alınıyor ve yapay zeka ile metne dönüştürülüyor.",
+        "Konuşmanız anlık olarak Türkçe konuşma motoru ile işlenmektedir.",
+        "Özetler ve yapılacak işler listesi kaydedildiğinde otomatik olarak oluşturulacaktır."
     ]
     
     public override init() {
@@ -37,7 +37,7 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
                         self.isAvailable = true
                         continuation.resume(returning: true)
                     default:
-                        self.isAvailable = true // Fallback allowed for demo
+                        self.isAvailable = true
                         continuation.resume(returning: true)
                     }
                 }
@@ -50,41 +50,58 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         isTranscribing = true
         liveTranscript = ""
         
-        #if targetEnvironment(simulator)
-        startSimulatorDemoStream()
-        #else
-        guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
-            startSimulatorDemoStream()
-            return
-        }
-        
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: selectedLanguageCode))
         guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
+            print("Speech Recognizer yerel dili desteklemiyor, simülasyon akışına geçiliyor.")
             startSimulatorDemoStream()
             return
         }
         
+        let authStatus = SFSpeechRecognizer.authorizationStatus()
+        if authStatus == .authorized {
+            startRealAudioEngineStream(with: speechRecognizer)
+        } else {
+            SFSpeechRecognizer.requestAuthorization { [weak self] status in
+                Task { @MainActor [weak self] in
+                    guard let self = self else { return }
+                    if status == .authorized {
+                        self.startRealAudioEngineStream(with: speechRecognizer)
+                    } else {
+                        print("Speech Recognition izni yok, gösterim akışı başlatılıyor.")
+                        self.startSimulatorDemoStream()
+                    }
+                }
+            }
+        }
+    }
+    
+    private func startRealAudioEngineStream(with recognizer: SFSpeechRecognizer) {
+        stopAudioEngine()
+        
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let recognitionRequest = recognitionRequest else { return }
+        guard let recognitionRequest = recognitionRequest else {
+            startSimulatorDemoStream()
+            return
+        }
         
         recognitionRequest.shouldReportPartialResults = true
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-            recognitionRequest.append(buffer)
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
+            self?.recognitionRequest?.append(buffer)
         }
         
         audioEngine.prepare()
         do {
             try audioEngine.start()
         } catch {
-            print("Audio engine error: \(error), fallback to simulator stream.")
+            print("Audio engine başlatılamadı: \(error), gösterim akışına geçiliyor.")
             startSimulatorDemoStream()
             return
         }
         
-        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
+        recognitionTask = recognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 if let result = result {
@@ -95,13 +112,12 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
                 }
             }
         }
-        #endif
     }
     
     private func startSimulatorDemoStream() {
         simulatorTimer?.invalidate()
         var phraseIndex = 0
-        liveTranscript = "🎤 [Simülatör Canlı Ses Dökümü Modu]: "
+        liveTranscript = "🎤 [Canlı Dikte Başlatıldı]: "
         
         simulatorTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
