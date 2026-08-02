@@ -14,13 +14,6 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var audioEngine = AVAudioEngine()
-    private var simulatorTimer: Timer?
-    
-    private let demoPhrases = [
-        "Sesli not kaydı alınıyor ve yapay zeka ile metne dönüştürülüyor.",
-        "Konuşmanız anlık olarak Türkçe konuşma motoru ile işlenmektedir.",
-        "Özetler ve yapılacak işler listesi kaydedildiğinde otomatik olarak oluşturulacaktır."
-    ]
     
     public override init() {
         super.init()
@@ -52,8 +45,7 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: selectedLanguageCode))
         guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
-            print("Speech Recognizer yerel dili desteklemiyor, simülasyon akışına geçiliyor.")
-            startSimulatorDemoStream()
+            print("Speech Recognizer yerel dili desteklemiyor.")
             return
         }
         
@@ -66,9 +58,6 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
                     guard let self = self else { return }
                     if status == .authorized {
                         self.startRealAudioEngineStream(with: speechRecognizer)
-                    } else {
-                        print("Speech Recognition izni yok, gösterim akışı başlatılıyor.")
-                        self.startSimulatorDemoStream()
                     }
                 }
             }
@@ -79,10 +68,7 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         stopAudioEngine()
         
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let recognitionRequest = recognitionRequest else {
-            startSimulatorDemoStream()
-            return
-        }
+        guard let recognitionRequest = recognitionRequest else { return }
         
         recognitionRequest.shouldReportPartialResults = true
         let inputNode = audioEngine.inputNode
@@ -96,8 +82,7 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
         do {
             try audioEngine.start()
         } catch {
-            print("Audio engine başlatılamadı: \(error), gösterim akışına geçiliyor.")
-            startSimulatorDemoStream()
+            print("Audio engine başlatılamadı: \(error)")
             return
         }
         
@@ -108,34 +93,13 @@ public final class SpeechRecognizerManager: NSObject, SFSpeechRecognizerDelegate
                     self.liveTranscript = result.bestTranscription.formattedString
                 }
                 if error != nil {
-                    print("Speech recognition task error: \(error?.localizedDescription ?? ""). Fallback to demo stream.")
-                    if self.liveTranscript.isEmpty || self.liveTranscript.hasPrefix("🎤 [Canlı Dikte Başlatıldı]: ") {
-                        self.startSimulatorDemoStream()
-                    }
-                }
-            }
-        }
-    }
-    
-    private func startSimulatorDemoStream() {
-        simulatorTimer?.invalidate()
-        var phraseIndex = 0
-        liveTranscript = "🎤 [Canlı Dikte Başlatıldı]: "
-        
-        simulatorTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self = self, self.isTranscribing else { return }
-                if phraseIndex < self.demoPhrases.count {
-                    self.liveTranscript += self.demoPhrases[phraseIndex] + " "
-                    phraseIndex += 1
+                    print("Speech recognition task error: \(error?.localizedDescription ?? "")")
                 }
             }
         }
     }
     
     public func stopTranscribing() {
-        simulatorTimer?.invalidate()
-        simulatorTimer = nil
         stopAudioEngine()
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()

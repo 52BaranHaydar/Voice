@@ -234,10 +234,10 @@ public struct RecorderView: View {
                     }
                     
                     ScrollView {
-                        Text(speechManager.liveTranscript.isEmpty ? "Konuşmaya başladığınızda canlı yapay zeka metin dökümü burada otomatik belirecektir..." : speechManager.liveTranscript)
+                        Text(speechManager.liveTranscript.isEmpty ? "🎙️ Sesiniz kaydediliyor... Kaydı tamamladığınızda yapay zeka ses kaydınızı dinleyip metne dökümünü çıkaracaktır." : speechManager.liveTranscript)
                             .font(.subheadline)
                             .lineSpacing(4)
-                            .foregroundColor(speechManager.liveTranscript.isEmpty ? VoiceTheme.textSecondary.opacity(0.5) : VoiceTheme.textPrimary)
+                            .foregroundColor(speechManager.liveTranscript.isEmpty ? VoiceTheme.textSecondary : VoiceTheme.textPrimary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .multilineTextAlignment(.leading)
                     }
